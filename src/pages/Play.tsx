@@ -7,14 +7,14 @@ import {
   LoaderCircle,
   Plus,
   RefreshCw,
-  Swords,
+  Search,
+  Star,
   Users,
 } from 'lucide-react';
 import { api } from '../lib';
-import { DeckTile, EmptyState } from '../components';
+import { CardImage, EmptyState } from '../components';
 import type { Send } from '../main';
-import type { Deck, Room } from '../types';
-
+import type { Deck, Opponent, Room } from '../types';
 export function Play({
   mode,
   decks,
@@ -34,13 +34,29 @@ export function Play({
   send: Send;
   notify: (text: string) => void;
 }) {
-  const [selected, setSelected] = useState(decks[0]?.id || ''),
-    [botDeck, setBotDeck] = useState('starter-dark'),
-    [rooms, setRooms] = useState<Room[]>([]),
+  const [selected, setSelected] = useState(
+      () => localStorage.getItem('dragon-active-deck') || decks[0]?.id || '',
+    ),
+    [opponents, setOpponents] = useState<Opponent[]>([]),
+    [opponentId, setOpponent] = useState('Dragun'),
+    [search, setSearch] = useState(''),
+    [difficulty, setDifficulty] = useState('all'),
     [roomId, setRoomId] = useState(''),
     [roomName, setRoomName] = useState(''),
-    [pending, setPending] = useState(false);
-  const online = mode === 'online';
+    [rooms, setRooms] = useState<Room[]>([]),
+    [pending, setPending] = useState(false),
+    [loadError, setLoadError] = useState(''),
+    [favorites, setFavorites] = useState<string[]>(() => {
+      try {
+        return JSON.parse(localStorage.getItem('dragon-bot-favorites') || '["Dragun"]');
+      } catch {
+        return ['Dragun'];
+      }
+    });
+  const online = mode === 'online',
+    deck = decks.find((d) => d.id === selected) || decks[0],
+    bot = opponents.find((o) => o.id === opponentId),
+    valid = ready && connected && !!deck;
   const refresh = () => {
     setPending(true);
     void api('/rooms')
@@ -49,83 +65,95 @@ export function Play({
       .finally(() => setPending(false));
   };
   useEffect(() => {
-    if (!selected && decks[0]) setSelected(decks[0].id);
-  }, [decks]);
+    if (online) {
+      refresh();
+      const t = setInterval(refresh, 10000);
+      return () => clearInterval(t);
+    }
+    setLoadError('');
+    void api('/opponents')
+      .then((data) => setOpponents(data.opponents))
+      .catch((e) => setLoadError(e.message));
+  }, [online]);
   useEffect(() => {
-    if (!online || room) return;
-    refresh();
-    const timer = setInterval(refresh, 10000);
-    return () => clearInterval(timer);
-  }, [online, room?.id]);
-  const valid = ready && connected && !!selected;
+    if (deck) localStorage.setItem('dragon-active-deck', deck.id);
+  }, [deck?.id]);
+  const visible = opponents
+    .filter(
+      (o) =>
+        `${o.name} ${o.description} ${o.command}`.toLowerCase().includes(search.toLowerCase()) &&
+        (difficulty === 'all' || difficulty === 'favorite'
+          ? difficulty !== 'favorite' || favorites.includes(o.id)
+          : o.tags.includes(difficulty)),
+    )
+    .sort((a, b) => Number(favorites.includes(b.id)) - Number(favorites.includes(a.id)));
+  const favorite = (id: string) => {
+    const next = favorites.includes(id) ? favorites.filter((x) => x !== id) : [...favorites, id];
+    setFavorites(next);
+    localStorage.setItem('dragon-bot-favorites', JSON.stringify(next));
+  };
   return (
     <>
       <div className="page-heading">
         <div>
-          <span className="eyebrow">
-            {online ? 'GOOD DUELS, GOOD COMPANY' : 'ONE MORE TURN, ONE MORE POSSIBILITY'}
-          </span>
-          <h1>
-            {online ? '联机对战' : '单人对战'}
-            <span className="title-dot">.</span>
-          </h1>
-          <p>{online ? '同一个房间，同一场精彩的决斗。' : '用一次练习，让每一步更有把握。'}</p>
+          <h1>{online ? '联机对战' : '单人对战'}</h1>
+          <p>{online ? '双方进入同一个房间，准备后开始。' : '选择对手，然后确认出战卡组。'}</p>
         </div>
-        <span className="quiet-label">
-          {online ? <Users size={17} /> : <Swords size={17} />}
-          {online ? '好友房间' : '基础练习对手'}
-        </span>
+        {room && (
+          <button className="button secondary" onClick={() => send({ type: 'leave' })}>
+            <DoorOpen size={16} />
+            离开房间
+          </button>
+        )}
       </div>
       {room ? (
-        <section className="room-panel panel">
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">DUEL ROOM</span>
-              <h2>{room.name}</h2>
-            </div>
-            <button className="button secondary" onClick={() => send({ type: 'leave' })}>
-              <DoorOpen size={16} />
-              离开房间
-            </button>
-          </div>
-          <div className="room-code">
-            <span>房间码</span>
-            <strong>{room.id}</strong>
-            <button
-              className="icon-button"
-              aria-label="复制房间码"
-              onClick={() => {
-                void navigator.clipboard
-                  .writeText(room.id)
-                  .then(() => notify('房间码已复制'))
-                  .catch(() => notify(`房间码：${room.id}`));
-              }}
-            >
-              <Copy size={18} />
-            </button>
+        <section className="room-panel">
+          <div className="room-title">
+            <h2>{room.name}</h2>
+            {room.mode === 'online' && (
+              <button
+                className="text-button mono"
+                onClick={() =>
+                  void navigator.clipboard
+                    .writeText(room.id)
+                    .then(() => notify('房间码已复制'))
+                    .catch(() => notify(room.id))
+                }
+              >
+                {room.id}
+                <Copy size={15} />
+              </button>
+            )}
           </div>
           <div className="room-seats">
             {[0, 1].map((i) => (
               <div className={`room-seat ${room.players[i]?.ready ? 'is-ready' : ''}`} key={i}>
-                <span className="avatar large">{room.players[i]?.name.slice(0, 1) || '+'}</span>
-                <h3>{room.players[i]?.name || '等待决斗者加入'}</h3>
-                <p>
+                <span className="seat-number">{String(i + 1).padStart(2, '0')}</span>
+                <h3>
+                  {room.players[i]?.name ||
+                    (i === 1 && room.mode === 'solo' ? room.opponent || 'AI 对手' : '等待对手')}
+                </h3>
+                <span className="muted small">
                   {room.players[i]
-                    ? `${i === 0 ? '房主' : '挑战者'}${i === seat ? ' · 你' : ''}`
-                    : '分享房间码邀请朋友'}
-                </p>
-                <span className="badge">
+                    ? i === seat
+                      ? '你'
+                      : i === 0
+                        ? '房主'
+                        : '挑战者'
+                    : room.mode === 'solo'
+                      ? 'WindBot'
+                      : '分享房间码邀请朋友'}
+                </span>
+                <span className="seat-ready">
                   {room.players[i]?.ready ? (
                     <>
-                      <Check size={13} />
+                      <Check size={14} />
                       已准备
                     </>
                   ) : room.players[i] ? (
-                    room.players[i]!.connected ? (
-                      '准备中'
-                    ) : (
-                      '已断线 · 等待重连'
-                    )
+                    '准备中'
+                  ) : room.mode === 'solo' ? (
+                    '正在连接'
                   ) : (
                     '空位'
                   )}
@@ -137,12 +165,12 @@ export function Play({
             <label>
               出战卡组
               <select
-                value={selected}
+                value={deck?.id || ''}
                 disabled={room.players[seat]?.ready || room.started}
                 onChange={(e) => setSelected(e.target.value)}
               >
                 {decks.map((d) => (
-                  <option value={d.id} key={d.id}>
+                  <option key={d.id} value={d.id}>
                     {d.name}
                   </option>
                 ))}
@@ -151,14 +179,13 @@ export function Play({
             {!room.started && (
               <>
                 <button
-                  className={`button ${room.players[seat]?.ready ? 'secondary' : 'primary'}`}
+                  className="button secondary"
                   disabled={!valid}
                   onClick={() =>
-                    send({ type: 'ready', deckId: selected, ready: !room.players[seat]?.ready })
+                    send({ type: 'ready', deckId: deck?.id, ready: !room.players[seat]?.ready })
                   }
                 >
-                  {room.players[seat]?.ready ? '取消准备' : '准备决斗'}
-                  <Check size={16} />
+                  {room.players[seat]?.ready ? '取消准备' : '准备'}
                 </button>
                 {seat === 0 && (
                   <button
@@ -167,172 +194,208 @@ export function Play({
                     onClick={() => send({ type: 'start' })}
                   >
                     开始对战
-                    <ArrowRight size={17} />
+                    <ArrowRight size={16} />
                   </button>
                 )}
               </>
             )}
             {room.started && (
               <a className="button primary" href="#duel">
-                返回对局
-                <ArrowRight size={17} />
+                返回对战
+                <ArrowRight size={16} />
               </a>
             )}
           </div>
         </section>
-      ) : (
-        <div className="play-layout">
+      ) : online ? (
+        <div className="online-layout">
           <section>
             <div className="section-heading">
-              <h2>选择出战卡组</h2>
-              <a href="#decks" className="text-button">
-                管理卡组
-                <ArrowRight size={15} />
-              </a>
+              <h2>开放房间</h2>
+              <button className="text-button" onClick={refresh}>
+                {pending ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}
+                刷新
+              </button>
             </div>
-            <div className="play-decks">
-              {decks.map((d) => (
-                <DeckTile
-                  key={d.id}
-                  deck={d}
-                  selected={selected === d.id}
-                  onClick={() => setSelected(d.id)}
-                />
-              ))}
-            </div>
-            {!decks.length && (
-              <EmptyState
-                title="先准备一副卡组"
-                text="资源准备完成后会提供练习卡组，也可以导入自己的 YDK。"
-              >
-                <a href="#decks" className="button secondary">
-                  前往卡组编辑
-                </a>
-              </EmptyState>
+            {rooms.length ? (
+              rooms.map((r) => (
+                <div className="room-row" key={r.id}>
+                  <Users size={19} />
+                  <div>
+                    <b>{r.name}</b>
+                    <small className="mono muted">{r.id}</small>
+                  </div>
+                  <span className="muted small">{r.players.filter(Boolean).length}/2</span>
+                  <button
+                    className="button secondary"
+                    disabled={r.players.every(Boolean)}
+                    onClick={() => send({ type: 'join', roomId: r.id })}
+                  >
+                    加入
+                  </button>
+                </div>
+              ))
+            ) : (
+              <EmptyState title="没有开放的房间" text="创建房间后，把房间码分享给朋友。" />
             )}
           </section>
-          <aside className="match-setup panel">
-            <span className="eyebrow">{online ? 'CREATE OR JOIN' : 'PRACTICE SETUP'}</span>
-            <h2>{online ? '准备好交锋了吗' : '进入练习'}</h2>
-            {online ? (
-              <>
-                <label>
-                  房间名称
-                  <input
-                    value={roomName}
-                    maxLength={32}
-                    onChange={(e) => setRoomName(e.target.value)}
-                    placeholder="我的决斗房间"
-                  />
-                </label>
+          <aside className="match-setup">
+            <h2>创建房间</h2>
+            <label>
+              房间名称
+              <input
+                value={roomName}
+                onChange={(e) => setRoomName(e.target.value)}
+                maxLength={32}
+                placeholder="我的房间"
+              />
+            </label>
+            <button
+              className="button primary"
+              disabled={!connected || !ready}
+              onClick={() => send({ type: 'create', roomName })}
+            >
+              <Plus size={16} />
+              创建
+            </button>
+            <div className="divider-label">加入好友房间</div>
+            <label>
+              房间码
+              <input
+                className="mono"
+                value={roomId}
+                maxLength={8}
+                onChange={(e) => setRoomId(e.target.value.toUpperCase())}
+                placeholder="8 位房间码"
+              />
+            </label>
+            <button
+              className="button secondary"
+              disabled={!connected || roomId.length !== 8}
+              onClick={() => send({ type: 'join', roomId })}
+            >
+              加入房间
+              <ArrowRight size={16} />
+            </button>
+          </aside>
+        </div>
+      ) : (
+        <div className="opponent-layout">
+          <section className="opponent-browser">
+            <div className="opponent-toolbar">
+              <label className="search-input">
+                <Search size={17} />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="搜索对手或卡组"
+                  aria-label="搜索 AI 对手"
+                />
+              </label>
+              <span className="muted small">{visible.length} 位对手</span>
+            </div>
+            <div className="filter-tabs" role="group" aria-label="对手分类">
+              {[
+                ['all', '全部'],
+                ['favorite', '收藏'],
+                ['AI_LV1', '入门'],
+                ['AI_LV2', '简单'],
+                ['AI_LV3', '进阶'],
+                ['AI_LV4', '竞技'],
+              ].map(([id, label]) => (
                 <button
-                  className="button primary"
-                  disabled={!connected || !ready}
-                  onClick={() => send({ type: 'create', roomName })}
+                  key={id}
+                  className={difficulty === id ? 'active' : ''}
+                  aria-pressed={difficulty === id}
+                  onClick={() => setDifficulty(id)}
                 >
-                  <Plus size={17} />
-                  创建房间
+                  {label}
                 </button>
-                <div className="divider-label">或加入好友房间</div>
-                <label>
-                  房间码
-                  <input
-                    value={roomId}
-                    onChange={(e) => setRoomId(e.target.value.toUpperCase())}
-                    maxLength={8}
-                    placeholder="输入 8 位房间码"
-                    className="mono"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && roomId.length === 8) send({ type: 'join', roomId });
-                    }}
-                  />
-                </label>
-                <button
-                  className="button secondary"
-                  disabled={!connected || !ready || roomId.length !== 8}
-                  onClick={() => send({ type: 'join', roomId })}
-                >
-                  加入房间
-                  <ArrowRight size={16} />
-                </button>
-              </>
-            ) : (
-              <>
-                <div className="setup-rule">
-                  <span>规则</span>
-                  <b>OCG / Master Rule 5</b>
+              ))}
+            </div>
+            <div className="opponent-list">
+              {visible.map((o) => (
+                <div className={`opponent-row ${o.id === opponentId ? 'selected' : ''}`} key={o.id}>
+                  <button className="opponent-select" onClick={() => setOpponent(o.id)}>
+                    <span className="opponent-monogram">
+                      {o.name.includes('我太帅') ? '帅' : o.name.slice(0, 1)}
+                    </span>
+                    <span>
+                      <strong>{o.name}</strong>
+                      <small>{o.description}</small>
+                    </span>
+                    {o.id === opponentId && <Check size={18} />}
+                  </button>
+                  <button
+                    className={`icon-button favorite-button ${favorites.includes(o.id) ? 'is-favorite' : ''}`}
+                    aria-label={`${favorites.includes(o.id) ? '取消收藏' : '收藏'}${o.name}`}
+                    onClick={() => favorite(o.id)}
+                  >
+                    <Star size={15} fill={favorites.includes(o.id) ? 'currentColor' : 'none'} />
+                  </button>
                 </div>
-                <div className="setup-rule">
-                  <span>初始生命值</span>
-                  <b className="mono">8,000 LP</b>
-                </div>
-                <div className="setup-rule">
-                  <span>先后手</span>
-                  <b>我方先攻</b>
-                </div>
-                <label>
-                  练习对手卡组
-                  <select value={botDeck} onChange={(e) => setBotDeck(e.target.value)}>
-                    {decks.map((d) => (
-                      <option key={d.id} value={d.id}>
-                        {d.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <p className="small muted">
-                  基础对手用于练习召唤、魔法与战斗。复杂展开建议使用联机对战。
-                </p>
-                <button
-                  className="button primary"
-                  disabled={!valid}
-                  onClick={() => send({ type: 'solo', deckId: selected, botDeckId: botDeck })}
-                >
-                  <Swords size={17} />
-                  开始单人对战
-                  <ArrowRight size={17} />
-                </button>
-              </>
-            )}
-            {!ready && <p className="warning-text small">资源正在准备，完成后即可开始。</p>}
-            {!connected && <p className="warning-text small">正在重新连接服务…</p>}
+              ))}
+            </div>
+            {loadError && <EmptyState title="无法读取对手列表" text={loadError} />}
+            <p className="opponent-source small muted">
+              对手表参考 MDPro3 的 WindBot 配置。服务器返回的昵称可能与对手表不同。
+            </p>
+          </section>
+          <aside className="solo-ready">
+            <div className="solo-deck-cover">
+              <CardImage code={deck?.cover || deck?.main[0]} />
+            </div>
+            <label>
+              出战卡组
+              <select value={deck?.id || ''} onChange={(e) => setSelected(e.target.value)}>
+                {decks.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <a className="text-button" href="#decks">
+              编辑卡组
+              <ChevronRightIcon />
+            </a>
+            <div className="solo-opponent">
+              <span>对手</span>
+              <b>{bot?.name || '请选择对手'}</b>
+              <small>{bot?.description}</small>
+            </div>
+            <div className="solo-rule">
+              <span>Master Rule 5</span>
+              <span>8000 LP</span>
+            </div>
+            <button
+              className="button primary"
+              disabled={!valid || !bot}
+              onClick={() => send({ type: 'solo', deckId: deck?.id, opponentId: bot?.id })}
+            >
+              开始对战
+              <ArrowRight size={18} />
+            </button>
+            {!connected && <p className="small warning-text">正在恢复连接</p>}
+            {!ready && <p className="small muted">卡库准备完成后即可开始</p>}
+            <details className="local-practice-option">
+              <summary>离线基础练习</summary>
+              <p>无需外部服务器，使用本地基础出牌策略。</p>
+              <button
+                className="text-button"
+                disabled={!valid}
+                onClick={() => send({ type: 'practice', deckId: deck?.id })}
+              >
+                开始基础练习
+                <ArrowRight size={14} />
+              </button>
+            </details>
           </aside>
         </div>
       )}
-      {online && !room && (
-        <section className="available-rooms">
-          <div className="section-heading">
-            <h2>
-              开放房间 <span>{rooms.length}</span>
-            </h2>
-            <button className="text-button" onClick={refresh}>
-              {pending ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}刷新
-            </button>
-          </div>
-          {rooms.length ? (
-            rooms.map((r) => (
-              <div className="room-row" key={r.id}>
-                <Users size={20} />
-                <div>
-                  <b>{r.name}</b>
-                  <small className="mono muted">{r.id}</small>
-                </div>
-                <span className="muted">{r.players.filter(Boolean).length} / 2</span>
-                <button
-                  className="button secondary compact"
-                  disabled={r.players.every(Boolean)}
-                  onClick={() => send({ type: 'join', roomId: r.id })}
-                >
-                  加入
-                  <ArrowRight size={15} />
-                </button>
-              </div>
-            ))
-          ) : (
-            <EmptyState title="还没有开放的房间" text="创建一个房间，把房间码分享给朋友。" />
-          )}
-        </section>
-      )}
     </>
   );
+}
+function ChevronRightIcon() {
+  return <ArrowRight size={13} />;
 }

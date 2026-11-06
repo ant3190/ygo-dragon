@@ -58,6 +58,31 @@ try {
   const cookie0 = boot.headers.get('set-cookie').split(';')[0],
     data = await boot.json();
   assert(data.resources.ready, 'prepare resources first');
+  const rejected = await fetch(base + '/api/decks', {
+    method: 'POST',
+    headers: {
+      Cookie: cookie0,
+      Origin: 'https://unrelated.example',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ name: 'must not save', main: [], extra: [], side: [] }),
+  });
+  assert.equal(rejected.status, 403);
+  const saved = await fetch(base + '/api/decks', {
+    method: 'POST',
+    headers: { Cookie: cookie0, Origin: base, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...data.decks[0], id: undefined, name: 'Room test copy' }),
+  });
+  assert.equal(saved.status, 200);
+  const savedId = (await saved.json()).deck.id;
+  const restoredDecks = await (
+    await fetch(base + '/api/bootstrap', { headers: { Cookie: cookie0 } })
+  ).json();
+  assert(restoredDecks.decks.some((d) => d.id === savedId));
+  await fetch(base + '/api/decks/' + savedId, {
+    method: 'DELETE',
+    headers: { Cookie: cookie0, Origin: base },
+  });
   const second = await fetch(base + '/api/bootstrap'),
     cookie1 = second.headers.get('set-cookie').split(';')[0];
   const [a, b] = await Promise.all([connect(cookie0), connect(cookie1)]);

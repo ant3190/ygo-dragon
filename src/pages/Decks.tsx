@@ -217,11 +217,10 @@ export function Decks({
         {hiddenFile}
         <div className="page-heading">
           <div>
-            <span className="eyebrow">YOUR STRATEGY STARTS HERE</span>
             <h1>
               卡组编辑<span className="title-dot">.</span>
             </h1>
-            <p>每一张卡片，都是战术的一部分。</p>
+            <p>编辑卡组，或导入已有的 YDK 文件。</p>
           </div>
           <div className="button-group">
             <button className="button secondary" onClick={() => file.current?.click()}>
@@ -286,7 +285,7 @@ export function Decks({
             <span>
               <Plus size={25} />
             </span>
-            <b>新的战术，从这里开始</b>
+            <b>新建卡组</b>
             <small>创建空白卡组</small>
           </button>
         </div>

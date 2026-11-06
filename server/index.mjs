@@ -12,6 +12,8 @@ import { Resources } from './resources.mjs';
 import { Catalog } from './catalog.mjs';
 import { makeStarters } from './starters.mjs';
 import { parseYdk, validateDeck } from '../shared/decks.mjs';
+import { RemoteDuel } from './remote-duel.mjs';
+import opponents from './data/ai-opponents.json' with { type: 'json' };
 
 const config = loadConfig(),
   resources = await new Resources(config).init();
@@ -97,6 +99,9 @@ function publicRoom(room) {
     mode: room.mode,
     started: !!room.worker,
     ended: !!room.ended,
+    opponent: room.opponent,
+    source:
+      room.mode === 'solo' ? 'WindBot' : room.mode === 'practice' ? '离线基础练习' : undefined,
     players: room.players.map((p, seat) =>
       p ? { name: p.name, ready: room.ready[seat], connected: p.sockets.size > 0, seat } : null,
     ),
@@ -136,7 +141,7 @@ function leave(user) {
   room.players[seat] = null;
   room.ready[seat] = false;
   room.decks[seat] = null;
-  if (!room.players.some(Boolean) || room.mode === 'solo') {
+  if (!room.players.some(Boolean) || room.mode === 'solo' || room.mode === 'practice') {
     room.worker?.terminate();
     rooms.delete(room.id);
   } else broadcastRoom(room);
@@ -144,15 +149,24 @@ function leave(user) {
 function start(room) {
   if (!resources.status.ready) throw new Error('本地资源尚未准备好，请到设置查看进度');
   if (room.worker) throw new Error('对局已开始');
-  const worker = new Worker(new URL('./duel-worker.mjs', import.meta.url), {
-    workerData: {
-      snapshot: resources.snapshot,
-      strings: path.join(config.data, 'strings.conf'),
-      decks: room.decks,
-      bot: room.mode === 'solo' ? 1 : -1,
-    },
-    resourceLimits: { maxOldGenerationSizeMb: 256 },
-  });
+  const worker =
+    room.mode === 'solo'
+      ? new RemoteDuel({
+          config,
+          catalog,
+          deck: room.decks[0],
+          bot: room.bot,
+          name: room.players[0].name,
+        })
+      : new Worker(new URL('./duel-worker.mjs', import.meta.url), {
+          workerData: {
+            snapshot: resources.snapshot,
+            strings: path.join(config.data, 'strings.conf'),
+            decks: room.decks,
+            bot: room.mode === 'practice' ? 1 : -1,
+          },
+          resourceLimits: { maxOldGenerationSizeMb: 256 },
+        });
   room.worker = worker;
   room.started = Date.now();
   broadcastRoom(room);
@@ -166,6 +180,15 @@ function start(room) {
     worker.terminate();
   };
   worker.on('message', (message) => {
+    if (message.type === 'frame') {
+      for (const ws of room.players[message.viewer]?.sockets || []) send(ws, message);
+      return;
+    }
+    if (message.type === 'opponent') {
+      room.opponent = message.name;
+      broadcastRoom(room);
+      return;
+    }
     if (message.type === 'view') {
       clearTimeout(timer);
       room.views[message.viewer] = message;
@@ -219,7 +242,7 @@ const server = http.createServer(async (req, res) => {
       method = req.method;
     if (method !== 'GET' && !sameOrigin(req)) return json(res, { error: '不允许跨站请求' }, 403);
     if (route === '/api/health')
-      return json(res, { ok: true, ready: resources.status.ready, version: '0.1.0' });
+      return json(res, { ok: true, ready: resources.status.ready, version: '0.2.0' });
     if (/^\/api\/images\/\d+\.jpg$/.test(route)) {
       try {
         const code = Number(route.match(/(\d+)\.jpg$/)[1]);
@@ -252,6 +275,7 @@ const server = http.createServer(async (req, res) => {
           resources: resources.status,
           room: rooms.has(user.room) ? publicRoom(rooms.get(user.room)) : null,
         });
+      if (route === '/api/opponents') return json(res, { opponents, server: config.aiServer });
       if (route === '/api/cards')
         return json(
           res,
@@ -408,11 +432,17 @@ wss.on('connection', (ws, user) => {
         const room = createRoom(user, 'online', m.roomName);
         broadcastRoom(room);
       }
-      if (m.type === 'solo') {
-        const deck = getDeck(user, m.deckId),
-          bot = getDeck(user, m.botDeckId || 'starter-dark');
-        const room = createRoom(user, 'solo', '单人练习');
-        room.decks = [deck, bot];
+      if (m.type === 'solo' || m.type === 'practice') {
+        const deck = getDeck(user, m.deckId);
+        const bot = opponents.find((o) => o.id === (m.opponentId || 'Dragun'));
+        if (m.type === 'solo' && !bot) throw new Error('请选择有效的 AI 对手');
+        const room = createRoom(user, m.type, m.type === 'solo' ? '单人对战' : '本地练习');
+        room.bot = bot;
+        room.opponent = m.type === 'solo' ? bot?.name : '基础练习对手';
+        room.decks = [
+          deck,
+          m.type === 'practice' ? getDeck(user, m.botDeckId || 'starter-dark') : null,
+        ];
         room.ready = [true, true];
         try {
           start(room);

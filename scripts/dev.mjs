@@ -1,5 +1,9 @@
 import { spawn } from 'node:child_process';
 const env = { ...process.env, YGO_PORT: '18082', YGO_DEV: '1' };
+// Vite forwards HTTP API calls and WebSocket upgrades differently. Permit only
+// the loopback development origins; production keeps its same-origin checks.
+env.YGO_ALLOWED_ORIGINS ||=
+  'http://127.0.0.1:4173,http://localhost:4173,http://127.0.0.1:5173,http://localhost:5173';
 if (!env.YGO_DATA_DIR)
   env.YGO_DATA_DIR = new URL('../../ygo-dragon-data', import.meta.url).pathname;
 const children = [

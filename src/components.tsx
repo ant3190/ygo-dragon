@@ -13,23 +13,22 @@ export function CardImage({
   eager?: boolean;
 }) {
   const card = useCard(back ? undefined : code),
-    [error, setError] = useState(false),
-    [loaded, setLoaded] = useState(false);
-  useEffect(() => {
-    setError(false);
-    setLoaded(false);
-  }, [code]);
+    [errorCode, setErrorCode] = useState<number>(),
+    [loadedCode, setLoadedCode] = useState<number>();
+  const error = !!code && errorCode === code,
+    loaded = !!code && loadedCode === code;
   return (
     <span className={`card-image ${back || !code ? 'card-back' : ''}`}>
-      {code && !back && !error && (
+      {!!code && !back && !error && (
         <img
+          key={code}
           src={`/api/images/${code}.jpg`}
           alt={card?.name || `卡片 ${code}`}
           loading={eager ? 'eager' : 'lazy'}
           decoding="async"
           draggable={false}
-          onLoad={() => setLoaded(true)}
-          onError={() => setError(true)}
+          onLoad={() => setLoadedCode(code)}
+          onError={() => setErrorCode(code)}
         />
       )}
       {(!loaded || error || back || !code) && (

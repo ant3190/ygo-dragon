@@ -51,7 +51,6 @@ export function SettingsPage({
     <>
       <div className="page-heading">
         <div>
-          <span className="eyebrow">MAKE IT YOURS</span>
           <h1>
             偏好设置<span className="title-dot">.</span>
           </h1>

@@ -43,6 +43,7 @@ export interface ResourceStatus {
   };
 }
 export interface FieldCard {
+  uid?: string;
   code?: number;
   controller: number;
   location: number;
@@ -99,6 +100,8 @@ export interface Prompt {
   tribute?: boolean;
 }
 export interface Room {
+  opponent?: string;
+  source?: string;
   id: string;
   name: string;
   mode: string;
@@ -107,6 +110,7 @@ export interface Room {
   players: ({ name: string; ready: boolean; connected: boolean; seat: number } | null)[];
 }
 export interface GameEvent {
+  text?: string;
   id: number;
   at: number;
   type: string;
@@ -118,6 +122,24 @@ export interface GameEvent {
   amount?: number;
   winner?: number;
   cards?: FieldCard[];
+}
+export interface Opponent {
+  id: string;
+  name: string;
+  command: string;
+  description: string;
+  tags: string[];
+}
+export interface Motion {
+  type: string;
+  uid?: string;
+  from?: Partial<FieldCard>;
+  to?: Partial<FieldCard>;
+  player?: number;
+  code?: number;
+  index?: number;
+  count?: number;
+  amount?: number;
 }
 export interface Settings {
   name: string;
@@ -132,5 +154,7 @@ export interface ResponseInput {
   cancel?: boolean;
   finish?: boolean;
   clear?: boolean;
+  cancelAll?: boolean;
+  materialIds?: string[];
   counts?: number[];
 }

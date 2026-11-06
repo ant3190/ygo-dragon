@@ -1,37 +1,50 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
   Check,
   ChevronDown,
+  ChevronUp,
   Clock3,
   Flag,
   Info,
   Layers3,
   List,
   LoaderCircle,
-  Minus,
+  Menu,
   RotateCcw,
+  Search,
+  Settings2,
+  Shield,
+  Sparkles,
   Swords,
-  WifiOff,
   X,
 } from 'lucide-react';
 import { CardDetail, CardImage, Modal } from '../components';
 import { locationLabel, phases, sumValid, useCard } from '../lib';
+import { useCardMotion } from '../duel/motion';
 import type { Send } from '../main';
 import type {
   DuelState,
   FieldCard,
   GameEvent,
+  Motion,
   Option,
   Prompt,
   ResponseInput,
   Room,
   Settings,
 } from '../types';
-
-const sameSpot = (a: Partial<FieldCard>, b: Partial<FieldCard>) =>
+const spot = (c: Partial<FieldCard>) => `${c.controller}-${c.location}-${c.sequence}`;
+const same = (a: Partial<FieldCard>, b: Partial<FieldCard>) =>
   a.controller === b.controller && a.location === b.location && a.sequence === b.sequence;
+const multiKinds = ['cards', 'sum', 'sort', 'attributes'];
+function cardKey(c: FieldCard) {
+  return c.uid || `hidden-${spot(c)}`;
+}
+function optionKey(o: Option) {
+  return `${spot(o)}-${o.code || o.label}-${o.action ?? ''}`;
+}
 export function Duel({
   state,
   prompt,
@@ -43,6 +56,10 @@ export function Duel({
   onSettings,
   send,
   notify,
+  motion,
+  animating,
+  fatal,
+  inputEpoch,
 }: {
   state: DuelState;
   prompt: Prompt | null;
@@ -54,641 +71,857 @@ export function Duel({
   onSettings: (s: Settings) => void;
   send: Send;
   notify: (s: string) => void;
+  motion: Motion | null;
+  animating: boolean;
+  fatal: string;
+  inputEpoch: number;
 }) {
-  const [inspect, setInspect] = useState(0),
+  const root = useRef<HTMLDivElement>(null),
+    [inspect, setInspect] = useState(0),
     [active, setActive] = useState<FieldCard | null>(null),
+    [anchor, setAnchor] = useState({ x: 0, y: 0 }),
     [selected, setSelected] = useState<string[]>([]),
     [submitting, setSubmitting] = useState(false),
-    [pile, setPile] = useState<{ title: string; cards: (FieldCard | null)[] } | null>(null),
-    [confirm, setConfirm] = useState<{ title: string; action: () => void } | null>(null),
-    [showLog, setShowLog] = useState(false),
-    [showInfo, setShowInfo] = useState(false);
-  const lastAuto = useRef(0),
-    responseTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+    [browse, setBrowse] = useState<{ player: number; location: number } | null>(null),
+    [phaseOpen, setPhaseOpen] = useState(false),
+    [phaseConfirm, setPhaseConfirm] = useState<Option | null>(null),
+    [menuOpen, setMenuOpen] = useState(false),
+    [confirmLeave, setConfirmLeave] = useState(false),
+    [showInfo, setShowInfo] = useState(false),
+    [logOpen, setLogOpen] = useState(false),
+    [held, setHeld] = useState<'all' | 'off' | null>(null),
+    [collapsed, setCollapsed] = useState(false);
+  const lastResponse = useRef(0),
+    timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined),
+    lastPrompt = useRef<Prompt | null>(null);
+  const locked = !connected || submitting || animating || state.ended || !!fatal;
+  useCardMotion(root, state, motion, settings.motion);
   useEffect(() => {
-    setSelected([]);
+    if (!prompt) {
+      setActive(null);
+      return;
+    }
     setSubmitting(false);
+    setSelected([]);
+    setActive(null);
+    setPhaseOpen(false);
+    setPhaseConfirm(null);
+    if (prompt.kind !== 'unselect' || lastPrompt.current?.kind !== 'unselect') {
+      const fieldOnly =
+        ['cards', 'sum', 'unselect', 'chain'].includes(prompt.kind) &&
+        prompt.options.length > 0 &&
+        prompt.options.every((o) => o.location === 4 || o.location === 8);
+      setCollapsed(fieldOnly);
+    }
+    lastPrompt.current = prompt;
   }, [prompt?.id]);
-  const respond = (input: Omit<ResponseInput, 'promptId'>) => {
-    if (!prompt || submitting || !connected) return;
-    setSubmitting(true);
-    send({ type: 'response', input: { promptId: prompt.id, ...input } });
-    clearTimeout(responseTimer.current);
-    responseTimer.current = setTimeout(() => setSubmitting(false), 2500);
-  };
+  useEffect(() => {
+    setSubmitting(false);
+  }, [inputEpoch]);
+  const respond = useCallback(
+    (input: Omit<ResponseInput, 'promptId'>) => {
+      if (!prompt || locked) return;
+      setSubmitting(true);
+      setActive(null);
+      setBrowse(null);
+      setPhaseOpen(false);
+      send({ type: 'response', input: { promptId: prompt.id, ...input } });
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => setSubmitting(false), 4000);
+    },
+    [prompt, locked, send],
+  );
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const effectiveChain = held || settings.chain;
   useEffect(() => {
     if (
-      prompt?.kind === 'chain' &&
-      prompt.canCancel &&
-      (settings.chain === 'off' || (settings.chain === 'auto' && prompt.specialCount === 0)) &&
-      lastAuto.current !== prompt.id
-    ) {
-      lastAuto.current = prompt.id;
+      !prompt ||
+      locked ||
+      prompt.kind !== 'chain' ||
+      !prompt.canCancel ||
+      lastResponse.current === prompt.id
+    )
+      return;
+    if (effectiveChain === 'off' || (effectiveChain === 'auto' && prompt.specialCount === 0)) {
+      lastResponse.current = prompt.id;
       respond({ cancel: true });
     }
-  }, [prompt?.id, settings.chain]);
-  useEffect(() => () => clearTimeout(responseTimer.current), []);
-  const choose = (id: string) =>
+  }, [prompt?.id, effectiveChain, locked]);
+  const options = prompt?.options || [],
+    selectedOptions =
+      prompt?.kind === 'unselect'
+        ? options.filter((o) => !!o.selected !== selected.includes(o.id))
+        : options.filter((o) => selected.includes(o.id));
+  const canConfirm =
+    !!prompt &&
+    (prompt.kind === 'unselect'
+      ? !!prompt.canFinish || selected.length > 0
+      : selected.length >= prompt.min &&
+        selected.length <= prompt.max &&
+        (prompt.kind !== 'sum' ||
+          sumValid(
+            [...(prompt.mandatory || []), ...selectedOptions],
+            prompt.amount || 0,
+            prompt.greater,
+          )));
+  const choose = (option: Option) => {
+    if (locked) return;
+    if (prompt?.kind === 'unselect') {
+      setSelected((old) =>
+        old.includes(option.id) ? old.filter((id) => id !== option.id) : [...old, option.id],
+      );
+      return;
+    }
     setSelected((old) =>
-      old.includes(id)
-        ? old.filter((v) => v !== id)
-        : prompt && old.length < prompt.max
-          ? [...old, id]
-          : prompt?.max === 1
-            ? [id]
+      old.includes(option.id)
+        ? old.filter((id) => id !== option.id)
+        : prompt?.max === 1
+          ? [option.id]
+          : old.length < (prompt?.max || 1)
+            ? [...old, option.id]
             : old,
     );
-  const actions =
-    prompt?.kind === 'actions' ? prompt.options.filter((o) => active && sameSpot(o, active)) : [];
-  const phaseActions = prompt?.kind === 'actions' ? prompt.options.filter((o) => o.phase) : [];
-  const mine = state.players[seat],
-    theirs = state.players[1 - seat];
-  const name = (player: number) =>
-    room?.players[player]?.name || (player === seat ? settings.name : '练习对手');
-  function clickCard(card: FieldCard) {
-    setActive(card);
-    if (card.code) setInspect(card.code);
-    if (prompt?.kind === 'zones') {
-      const option = prompt.options.find((o) => sameSpot(o, card));
-      if (option) choose(option.id);
+  };
+  const resetSelection = () => {
+    setSelected([]);
+    if (prompt?.kind === 'unselect' && options.some((o) => o.selected)) respond({ clear: true });
+  };
+  const cancel = () => {
+    if (prompt?.kind === 'unselect') {
+      setSelected([]);
+      if (options.some((o) => o.selected)) respond({ clear: true, cancelAll: true });
+      else if (prompt.canCancel) respond({ cancel: true });
+    } else if (prompt?.canCancel) respond({ cancel: true });
+    else resetSelection();
+  };
+  const back = useCallback(() => {
+    if (showInfo) {
+      setShowInfo(false);
+      return;
     }
-  }
-  function clickZone(controller: number, location: number, sequence: number) {
+    if (menuOpen) {
+      setMenuOpen(false);
+      return;
+    }
+    if (browse) {
+      setBrowse(null);
+      return;
+    }
+    if (phaseOpen) {
+      setPhaseOpen(false);
+      setPhaseConfirm(null);
+      return;
+    }
+    if (active) {
+      setActive(null);
+      return;
+    }
+    if (locked) return;
+    if (selected.length) {
+      setSelected((old) => old.slice(0, -1));
+      return;
+    }
+    if (prompt?.kind === 'unselect') {
+      const last = prompt.options.filter((o) => o.selected).at(-1);
+      if (last) {
+        setSelected([last.id]);
+        return;
+      }
+    }
+    if (prompt?.canCancel && !locked) respond({ cancel: true });
+  }, [showInfo, menuOpen, browse, phaseOpen, active, prompt, selected, locked, respond]);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        back();
+      }
+      if (e.key === 'Enter' && !e.repeat && canConfirm && !locked) {
+        e.preventDefault();
+        respond(prompt?.kind === 'unselect' ? { materialIds: selected } : { ids: selected });
+      }
+    };
+    const release = () => setHeld(null);
+    window.addEventListener('keydown', key);
+    window.addEventListener('pointerup', release);
+    window.addEventListener('blur', release);
+    return () => {
+      window.removeEventListener('keydown', key);
+      window.removeEventListener('pointerup', release);
+      window.removeEventListener('blur', release);
+    };
+  }, [back, canConfirm, locked, prompt, selected, respond]);
+  const activate = (card: FieldCard, event: React.MouseEvent<HTMLElement>) => {
+    event.stopPropagation();
+    if (card.code) setInspect(card.code);
+    const option = prompt?.kind !== 'actions' ? options.find((o) => same(o, card)) : undefined;
+    if (option) {
+      choose(option);
+      return;
+    }
+    if (prompt?.kind === 'actions' && options.some((o) => same(o, card)) && !locked) {
+      const rect = event.currentTarget.getBoundingClientRect();
+      setAnchor({ x: rect.left + rect.width / 2, y: rect.top });
+      setActive(card);
+    } else setActive(null);
+  };
+  const actions =
+      prompt?.kind === 'actions' && active ? options.filter((o) => same(o, active)) : [],
+    phaseActions = prompt?.kind === 'actions' ? options.filter((o) => o.phase) : [];
+  const label = (player: number) =>
+    player === seat
+      ? room?.players[seat]?.name || settings.name
+      : room?.players[1 - seat]?.name || room?.opponent || 'AI 对手';
+  const mine = state.players[seat],
+    other = state.players[1 - seat];
+  const selectCount = prompt?.kind === 'unselect' ? selectedOptions.length : selected.length;
+  const clickBlank = (player: number, location: number, sequence: number) => {
     const option =
       prompt?.kind === 'zones' &&
-      prompt.options.find((o) => sameSpot(o, { controller, location, sequence }));
-    if (option) choose(option.id);
-  }
-  function clearSelection() {
-    if (prompt?.kind === 'unselect') respond({ clear: true });
-    else setSelected([]);
-  }
-  const zone = (controller: number, location: number, sequence: number, label = '') => {
-    const card = state.players[controller].zones[location]?.[sequence],
+      options.find((o) => same(o, { controller: player, location, sequence }));
+    if (option) choose(option);
+    else setActive(null);
+  };
+  const tile = (player: number, location: number, sequence: number) => {
+    const card = state.players[player].zones[location]?.[sequence],
       option =
-        prompt?.kind === 'zones'
-          ? prompt.options.find((o) => sameSpot(o, { controller, location, sequence }))
-          : null;
+        prompt && prompt.kind !== 'actions'
+          ? options.find((o) => same(o, { controller: player, location, sequence }))
+          : undefined;
+    const chosen = option && selectedOptions.some((o) => o.id === option.id),
+      usable =
+        prompt?.kind === 'actions' &&
+        options.some((o) => same(o, { controller: player, location, sequence }));
     return (
       <button
-        key={`${controller}-${location}-${sequence}`}
-        className={`field-zone ${controller === seat ? 'own' : 'opponent'} ${option ? 'available' : ''} ${option && selected.includes(option.id) ? 'chosen' : ''} ${card && active && sameSpot(card, active) ? 'active' : ''}`}
-        aria-label={
-          card?.code
-            ? `查看卡片 ${card.code}`
-            : `${controller === seat ? '我方' : '对方'}${label || locationLabel[location]} ${sequence + 1}`
+        key={`${player}-${location}-${sequence}`}
+        className={`md-zone ${player === seat ? 'own' : 'opponent'} ${option ? 'selectable' : ''} ${chosen ? 'chosen' : ''} ${active && same(active, { controller: player, location, sequence }) ? 'active' : ''}`}
+        data-zone-key={`${player}-${location}-${sequence}`}
+        data-card-spot={card ? spot(card) : undefined}
+        aria-label={`${player === seat ? '我方' : '对方'}${location === 4 ? '怪兽' : '魔法陷阱'}区 ${sequence + 1}${card?.code ? `，卡片 ${card.code}` : ''}`}
+        onClick={(e) =>
+          card
+            ? activate({ ...card, controller: player, location, sequence }, e)
+            : clickBlank(player, location, sequence)
         }
-        onClick={() => (card ? clickCard(card) : clickZone(controller, location, sequence))}
-        onContextMenu={(e) => {
-          if (prompt?.kind === 'zones') {
-            e.preventDefault();
-            clearSelection();
-          }
+        onPointerEnter={() => {
+          if (card?.code) setInspect(card.code);
         }}
       >
         {card ? (
           <>
-            <div className={`field-card ${card.position & 12 ? 'defense' : ''}`}>
-              <CardImage code={card.code} back={!card.code || !(card.position & 5)} />
+            <div className="md-motion-card" data-motion-key={cardKey(card)}>
+              <div
+                className="md-card-rotation"
+                style={{
+                  transform: `rotate(${(player === seat ? 0 : 180) + (card.position & 12 ? -90 : 0)}deg)`,
+                }}
+              >
+                <CardImage code={card.code} back={!card.code || !(card.position & 5)} />
+              </div>
             </div>
             {location === 4 && !!(card.position & 5) && (
-              <span className="field-card-stats">
-                <b>{card.attack ?? '?'}</b>
-                <span>/</span>
-                <span>{card.link?.rating ? `L${card.link.rating}` : (card.defense ?? '?')}</span>
+              <span className="md-atk">
+                <b className={card.position & 12 ? 'muted-stat' : ''}>{stat(card.attack)}</b>
+                <small className={card.position & 12 ? 'primary-stat' : ''}>
+                  {card.link?.rating ? `LINK ${card.link.rating}` : stat(card.defense)}
+                </small>
               </span>
             )}
             {!!card.overlayCards?.length && (
-              <span className="material-count">{card.overlayCards.length}</span>
+              <span className="md-materials">{card.overlayCards.length}</span>
             )}
           </>
         ) : (
-          <span className="zone-label">
-            {label || (location === 4 ? 'M' : 'S / T')}
-            {!label && <small>{sequence + 1}</small>}
+          <span className="md-zone-corners">
+            <small>{location === 4 ? (sequence > 4 ? 'EX' : 'M') : 'S/T'}</small>
           </span>
         )}
-        {option && (
-          <span className="zone-select-mark">
-            {selected.includes(option.id) ? <Check size={15} /> : <PlusMark />}
+        {chosen && (
+          <span className="md-selected-mark">
+            <Check size={16} />
           </span>
         )}
+        {usable && !option && <span className="md-action-dot" />}
       </button>
     );
   };
-  const pileButton = (controller: number, location: number, label: string) => {
-    const cards = state.players[controller].zones[location] || [],
-      top = cards.filter(Boolean).at(-1);
+  const pile = (player: number, location: number, name: string) => {
+    const cards = state.players[player].zones[location] || [],
+      top = cards.filter(Boolean).at(-1),
+      eligible = options.some((o) => o.controller === player && o.location === location);
     return (
       <button
-        className={`field-pile ${controller === seat ? 'own' : 'opponent'}`}
-        onClick={() =>
-          setPile({ title: `${controller === seat ? '我方' : '对方'} · ${label}`, cards })
-        }
-        aria-label={`查看${controller === seat ? '我方' : '对方'}${label}，${cards.filter(Boolean).length}张`}
+        className={`md-pile ${player === seat ? 'own' : 'opponent'} ${eligible ? 'selectable' : ''}`}
+        aria-label={`查看${player === seat ? '我方' : '对方'}${name}，${cards.filter(Boolean).length}张`}
+        data-zone-key={`${player}-${location}`}
+        onClick={() => {
+          setBrowse({ player, location });
+          setActive(null);
+        }}
       >
-        <span className="pile-card">
-          {cards.length ? (
-            <CardImage
-              code={top?.code}
-              back={location === 1 || !top?.code || !!((top.position || 0) & 10)}
-            />
+        <span className="md-pile-card">
+          {top ? (
+            <div className="md-motion-card" data-motion-key={cardKey(top)}>
+              <div
+                className="md-card-rotation"
+                style={{ transform: `rotate(${player === seat ? 0 : 180}deg)` }}
+              >
+                <CardImage
+                  code={top.code}
+                  back={location === 1 || !top.code || !!(top.position & 10)}
+                />
+              </div>
+            </div>
           ) : (
-            <Layers3 size={22} strokeWidth={1} />
+            <Layers3 size={19} strokeWidth={1} />
           )}
         </span>
-        <span className="pile-label">
-          {label}
+        <span>
+          {name}
           <b>{cards.filter(Boolean).length}</b>
         </span>
       </button>
     );
   };
-  const row = (player: number, location: number, left: React.ReactNode, right: React.ReactNode) => (
-    <div className="field-row" key={`${player}-${location}`}>
-      {left}
-      {Array.from({ length: 5 }, (_, i) => (player === seat ? i : 4 - i)).map((i) =>
-        zone(player, location, i),
-      )}
-      {right}
+  const fieldSide = (player: number, opponent: boolean) => (
+    <div className={`md-field-half ${opponent ? 'upper' : 'lower'}`}>
+      <div className="md-five md-spells">
+        {Array.from({ length: 5 }, (_, i) => (opponent ? 4 - i : i)).map((i) => tile(player, 8, i))}
+      </div>
+      <div className="md-five md-monsters">
+        {Array.from({ length: 5 }, (_, i) => (opponent ? 4 - i : i)).map((i) => tile(player, 4, i))}
+      </div>
+      <div className="md-side md-deck">{pile(player, 1, '卡组')}</div>
+      <div className="md-side md-extra">{pile(player, 64, '额外')}</div>
+      <div className="md-side md-grave">{pile(player, 16, '墓地')}</div>
+      <div className="md-side md-field-spell">{tile(player, 8, 5)}</div>
+      <div className="md-side md-banished">{pile(player, 32, '除外')}</div>
     </div>
-  );
-  const phaseButton = (option: Option) => (
-    <button
-      key={option.id}
-      className={`button ${option.phase === 'end' ? 'primary' : 'secondary'}`}
-      disabled={submitting || !connected}
-      onClick={() =>
-        option.phase === 'end' && settings.confirmEnd
-          ? setConfirm({ title: '结束当前回合？', action: () => respond({ ids: [option.id] }) })
-          : respond({ ids: [option.id] })
-      }
-    >
-      {option.label}
-      <ArrowRight size={15} />
-    </button>
   );
   return (
     <div
-      className="duel-screen"
+      ref={root}
+      className={`md-duel ${locked ? 'locked' : ''}`}
       onContextMenu={(e) => {
-        if (prompt && prompt.kind !== 'actions') {
-          e.preventDefault();
-          clearSelection();
-        }
+        e.preventDefault();
+        back();
+      }}
+      onPointerDown={(e) => {
+        if (e.button === 0) setHeld('all');
+        if (e.button === 2) setHeld('off');
       }}
     >
-      <header className="duel-topbar">
-        <a href={room?.mode === 'online' ? '#online' : '#home'} className="text-button">
-          <ArrowLeft size={17} />
-          大厅
-        </a>
-        <span className="duel-wordmark">
-          DRAGON<span>/ DUEL</span>
-        </span>
-        <div className="duel-topbar-actions">
-          <span className="small muted mono">{room?.id}</span>
+      <aside className="md-inspector">
+        <div className="md-system">
           <button
-            className="icon-button info-toggle"
-            aria-label="查看卡片信息"
-            onClick={() => setShowInfo(!showInfo)}
+            className="icon-button"
+            aria-label="对战菜单"
+            onClick={() => setMenuOpen(!menuOpen)}
+          >
+            <Menu size={20} />
+          </button>
+          <span>DRAGON</span>
+          <button
+            className="icon-button"
+            aria-label="显示卡片信息"
+            onClick={() => setShowInfo(true)}
           >
             <Info size={18} />
           </button>
-          <button
-            className="icon-button"
-            aria-label="查看对局记录"
-            onClick={() => setShowLog(true)}
-          >
-            <List size={18} />
-          </button>
-          <button
-            className="text-button danger-text"
-            onClick={() =>
-              setConfirm({
-                title: state.ended ? '离开当前对局？' : '确认认输并离开？',
-                action: () => send({ type: 'leave' }),
-              })
-            }
-          >
-            <Flag size={15} />
-            {state.ended ? '离开' : '认输'}
-          </button>
         </div>
-      </header>
-      {!connected && (
-        <div className="duel-reconnect" role="status">
-          <WifiOff size={15} />
-          连接中断，正在恢复当前对局…
+        <CardDetail code={inspect} />
+        <div className="md-own-life">
+          <PlayerLife name={label(seat)} lp={mine.lp} own motion={settings.motion} />
         </div>
-      )}
-      <div className="duel-layout">
-        <aside className="duel-inspector">
-          <CardDetail code={inspect || active?.code}>
-            <div className="inspector-actions">
-              {actions.length ? (
-                actions.map((o) => (
-                  <button
-                    key={o.id}
-                    className="button secondary"
-                    disabled={submitting || !connected}
-                    onClick={() => respond({ ids: [o.id] })}
-                  >
-                    {o.label}
-                    <ArrowRight size={15} />
-                  </button>
-                ))
-              ) : (
-                <p className="small muted">
-                  {prompt?.kind === 'actions'
-                    ? '点击手牌或场上的卡片，查看可用行动。'
-                    : '根据当前提示选择卡片或区域。'}
-                </p>
-              )}
-            </div>
-          </CardDetail>
-        </aside>
-        <section className="duel-arena">
-          <div className="duel-scoreboard">
-            <div className="player-score own">
-              <span className="player-avatar">{name(seat).slice(0, 1)}</span>
-              <div>
-                <b>{name(seat)}</b>
-                <span className="lp-value mono">
-                  {mine.lp.toLocaleString()}
-                  <small>LP</small>
-                </span>
-                <div className="lp-track">
-                  <span style={{ width: `${Math.min(100, mine.lp / 80)}%` }} />
+      </aside>
+      <main
+        className="md-play-area"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) setActive(null);
+        }}
+      >
+        <header className="md-opponent-head">
+          <span className="md-room-label">
+            {room?.source || '自由对战'}
+            {room?.mode === 'online' && ` · ${room.id}`}
+          </span>
+          <PlayerLife name={label(1 - seat)} lp={other.lp} own={false} motion={settings.motion} />
+        </header>
+        <div className="md-opponent-hand" aria-label={`对方手牌 ${other.zones[2]?.length || 0} 张`}>
+          {other.zones[2]?.map((c, i) => (
+            <span
+              className="md-motion-card"
+              data-motion-key={c ? cardKey(c) : `opp-${i}`}
+              data-hand-player={1 - seat}
+              key={c ? cardKey(c) : i}
+            >
+              <CardImage back />
+            </span>
+          ))}
+        </div>
+        <section className="md-table" aria-label="对战场地">
+          <div className="md-mat-divider" />
+          {fieldSide(1 - seat, true)}
+          <div className="md-extra-row">
+            {[5, 6].map((seq, i) => {
+              const opposite = seq === 5 ? 6 : 5;
+              const otherCard = other.zones[4]?.[opposite];
+              const oppAvailable =
+                prompt?.kind === 'zones' &&
+                options.some((o) =>
+                  same(o, { controller: 1 - seat, location: 4, sequence: opposite }),
+                );
+              return (
+                <div className={`md-extra-slot extra-${i}`} key={seq}>
+                  {otherCard || oppAvailable ? tile(1 - seat, 4, opposite) : tile(seat, 4, seq)}
                 </div>
-              </div>
-            </div>
-            <div className="turn-info">
-              <span className="eyebrow">TURN {String(state.turn).padStart(2, '0')}</span>
-              <b>{state.turnPlayer === seat ? '你的回合' : '对方回合'}</b>
-              <small>{phases[state.phase] || '阶段处理中'}</small>
-            </div>
-            <div className="player-score opponent">
-              <div>
-                <b>{name(1 - seat)}</b>
-                <span className="lp-value mono">
-                  {theirs.lp.toLocaleString()}
-                  <small>LP</small>
-                </span>
-                <div className="lp-track">
-                  <span style={{ width: `${Math.min(100, theirs.lp / 80)}%` }} />
-                </div>
-              </div>
-              <span className="player-avatar">{name(1 - seat).slice(0, 1)}</span>
-            </div>
+              );
+            })}
           </div>
-          <div className="opponent-hand" aria-label={`对方手牌 ${theirs.zones[2]?.length || 0} 张`}>
-            {theirs.zones[2]?.map((_, i) => (
-              <span key={i}>
-                <CardImage back />
-              </span>
-            ))}
-            <small>{theirs.zones[2]?.length || 0} 张手牌</small>
-          </div>
-          <div className="duel-field">
-            <div className="field-owner-label opponent">
-              <span />
-              对方场地
-            </div>
-            {row(1 - seat, 8, zone(1 - seat, 8, 5, '场地'), pileButton(1 - seat, 64, '额外'))}
-            {row(1 - seat, 4, pileButton(1 - seat, 1, '卡组'), pileButton(1 - seat, 16, '墓地'))}
-            <div className="extra-zone-row">
-              <div className="field-caption">MASTER RULE 5</div>
-              <div className="extra-zone-slot">
-                {state.players[seat].zones[4]?.[5] ? (
-                  zone(seat, 4, 5, 'EX')
-                ) : state.players[1 - seat].zones[4]?.[6] ? (
-                  zone(1 - seat, 4, 6, 'EX')
-                ) : (
-                  <>
-                    {zone(seat, 4, 5, 'EX')}
-                    {prompt?.kind === 'zones' &&
-                      prompt.options.some((o) =>
-                        sameSpot(o, { controller: 1 - seat, location: 4, sequence: 6 }),
-                      ) &&
-                      zone(1 - seat, 4, 6, 'EX')}
-                  </>
-                )}
-              </div>
-              <span className="field-axis">DRAGON</span>
-              <div className="extra-zone-slot">
-                {state.players[seat].zones[4]?.[6] ? (
-                  zone(seat, 4, 6, 'EX')
-                ) : state.players[1 - seat].zones[4]?.[5] ? (
-                  zone(1 - seat, 4, 5, 'EX')
-                ) : (
-                  <>
-                    {zone(seat, 4, 6, 'EX')}
-                    {prompt?.kind === 'zones' &&
-                      prompt.options.some((o) =>
-                        sameSpot(o, { controller: 1 - seat, location: 4, sequence: 5 }),
-                      ) &&
-                      zone(1 - seat, 4, 5, 'EX')}
-                  </>
-                )}
-              </div>
-              <div className="banished-piles">
-                {[1 - seat, seat].map((player) => (
-                  <button
-                    key={player}
-                    className={`banished-count ${player === seat ? 'own' : 'opponent'}`}
-                    onClick={() =>
-                      setPile({
-                        title: `${player === seat ? '我方' : '对方'} · 除外`,
-                        cards: state.players[player].zones[32] || [],
-                      })
-                    }
-                  >
-                    除外 <b>{state.players[player].zones[32]?.length || 0}</b>
-                  </button>
-                ))}
-              </div>
-            </div>
-            {row(seat, 4, pileButton(seat, 64, '额外'), pileButton(seat, 16, '墓地'))}
-            {row(seat, 8, zone(seat, 8, 5, '场地'), pileButton(seat, 1, '卡组'))}
-            <div className="field-owner-label own">
-              <span />
-              我方场地
-            </div>
-          </div>
-          <div className="my-hand" aria-label="我方手牌">
-            {mine.zones[2]?.map(
-              (card, i) =>
-                card && (
-                  <button
-                    key={`${i}-${card.code}`}
-                    className={`hand-card ${active && sameSpot(active, card) ? 'active' : ''} ${prompt?.kind === 'actions' && prompt.options.some((o) => sameSpot(o, card)) ? 'playable' : ''}`}
-                    onClick={() => clickCard(card)}
-                    title="点击查看可用行动"
+          {fieldSide(seat, false)}
+          <span className="md-mat-sign">D</span>
+          <AttackLine root={root} motion={motion} seat={seat} />
+        </section>
+        <div className="md-hand" aria-label="我方手牌">
+          {mine.zones[2]?.map(
+            (card, i) =>
+              card && (
+                <button
+                  className={`md-hand-card ${options.some((o) => same(o, card)) ? 'actionable' : ''} ${active && same(active, card) ? 'active' : ''} ${selectedOptions.some((o) => same(o, card)) ? 'chosen' : ''}`}
+                  key={cardKey(card)}
+                  aria-label={`手牌 ${card.code || i}`}
+                  title={card.code ? `卡片 ${card.code}` : '未知卡片'}
+                  onClick={(e) => activate(card, e)}
+                  onPointerEnter={() => {
+                    if (card.code) setInspect(card.code);
+                  }}
+                >
+                  <span
+                    className="md-motion-card"
+                    data-motion-key={cardKey(card)}
+                    data-hand-player={seat}
                   >
                     <CardImage code={card.code} />
-                    {prompt?.kind === 'actions' &&
-                      prompt.options.some((o) => sameSpot(o, card)) && (
-                        <span className="playable-dot" />
-                      )}
-                  </button>
-                ),
-            )}
-          </div>
-          <div className="arena-controls">
-            <div className="chain-modes" role="group" aria-label="连锁询问模式">
-              {[
-                ['off', '跳过'],
-                ['auto', '自动'],
-                ['all', '全时点'],
-              ].map(([value, label]) => (
-                <button
-                  key={value}
-                  aria-pressed={settings.chain === value}
-                  className={settings.chain === value ? 'active' : ''}
-                  onClick={() => onSettings({ ...settings, chain: value as Settings['chain'] })}
-                >
-                  {label}
+                  </span>
+                  {selectedOptions.some((o) => same(o, card)) && (
+                    <span className="md-selected-mark">
+                      <Check size={16} />
+                    </span>
+                  )}
                 </button>
-              ))}
-            </div>
-            <div className="turn-status">
-              {submitting ? <LoaderCircle size={14} className="spin" /> : <Clock3 size={14} />}
-              <span>
-                {state.ended
-                  ? '对局结束'
-                  : prompt?.title || (state.turnPlayer === seat ? '等待效果处理' : '对方正在操作')}
-              </span>
-            </div>
-            <button className="text-button" onClick={() => setShowLog(true)}>
-              <List size={15} />
-              记录
-            </button>
-          </div>
-          {!!actions.length && (
-            <div className="mobile-card-actions">
-              {actions.map((o) => (
-                <button
-                  key={o.id}
-                  className="button secondary"
-                  onClick={() => respond({ ids: [o.id] })}
-                  disabled={submitting || !connected}
-                >
-                  {o.label}
-                </button>
-              ))}
-            </div>
+              ),
           )}
-          {!!phaseActions.length && (
-            <div className="mobile-phase-actions">{phaseActions.map(phaseButton)}</div>
+        </div>
+        <div className="md-status-line" role="status">
+          {fatal ? (
+            <span className="danger-text">{fatal}</span>
+          ) : !connected ? (
+            '连接已断开，正在恢复'
+          ) : animating ? (
+            <>
+              <LoaderCircle size={13} className="spin" />
+              效果处理中
+            </>
+          ) : (
+            prompt?.title || (!state.turn ? '正在邀请 AI 对手' : '等待对方操作')
           )}
-        </section>
-        <aside className="duel-action-pane">
-          <div className="section-heading">
-            <h3>当前阶段</h3>
-            <Swords size={16} />
-          </div>
-          <div className="phase-steps">
+        </div>
+        <div className="md-bottom-tools">
+          <button className="icon-button" aria-label="卡片详情" onClick={() => setShowInfo(true)}>
+            <Info size={20} />
+          </button>
+          <button
+            className={`icon-button ${logOpen ? 'active' : ''}`}
+            aria-label="决斗记录"
+            onClick={() => setLogOpen(!logOpen)}
+          >
+            <List size={20} />
+          </button>
+          <div className="md-chain-switch" role="group" aria-label="连锁询问">
             {[
-              [1, '抽卡'],
-              [2, '准备'],
-              [4, '主要 1'],
-              [16, '战斗'],
-              [256, '主要 2'],
-              [512, '结束'],
-            ].map(([phase, label]) => (
-              <span
-                key={phase}
-                className={
-                  state.phase === phase || (phase === 16 && state.phase >= 8 && state.phase <= 128)
-                    ? 'active'
-                    : ''
-                }
+              ['off', '跳过'],
+              ['auto', '自动'],
+              ['all', '全时点'],
+            ].map(([id, text]) => (
+              <button
+                key={id}
+                className={effectiveChain === id ? 'active' : ''}
+                aria-pressed={effectiveChain === id}
+                onClick={() => onSettings({ ...settings, chain: id as Settings['chain'] })}
+                title="按住左键临时全时点，按住右键临时跳过"
               >
-                {label}
-              </span>
+                {text}
+              </button>
             ))}
           </div>
-          <div className="phase-actions">
-            {phaseActions.map(phaseButton)}
-            {!phaseActions.length && (
-              <p className="small muted">
-                {prompt ? '完成当前选择后继续' : state.ended ? '对局已结束' : '等待对方操作'}
-              </p>
+        </div>
+        <button
+          className={`md-phase-wheel ${state.turnPlayer === seat ? 'own-turn' : ''}`}
+          aria-label="切换阶段"
+          disabled={!phaseActions.length || locked}
+          onClick={() => {
+            setPhaseOpen(!phaseOpen);
+            setActive(null);
+          }}
+        >
+          <span>TURN {state.turn}</span>
+          <b>{phases[state.phase] || '准备中'}</b>
+          <ChevronRightSmall />
+        </button>
+        {phaseOpen && (
+          <div className="md-phase-menu">
+            <div>
+              <h3>{phaseConfirm ? '确认结束回合？' : '切换阶段'}</h3>
+              <button
+                className="icon-button"
+                aria-label="关闭阶段菜单"
+                onClick={() => {
+                  setPhaseOpen(false);
+                  setPhaseConfirm(null);
+                }}
+              >
+                <X size={15} />
+              </button>
+            </div>
+            {phaseConfirm ? (
+              <div className="button-group">
+                <button className="button secondary" onClick={() => setPhaseConfirm(null)}>
+                  返回
+                </button>
+                <button
+                  className="button primary"
+                  onClick={() => respond({ ids: [phaseConfirm.id] })}
+                >
+                  结束回合
+                  <Check size={15} />
+                </button>
+              </div>
+            ) : (
+              phaseActions.map((o) => (
+                <button
+                  key={o.id}
+                  onClick={() =>
+                    o.phase === 'end' && settings.confirmEnd
+                      ? setPhaseConfirm(o)
+                      : respond({ ids: [o.id] })
+                  }
+                >
+                  {o.label}
+                  <ArrowRight size={16} />
+                </button>
+              ))
             )}
           </div>
-          {!!state.chain.length && (
-            <div className="chain-stack">
-              <h3>连锁</h3>
-              {state.chain.map((c) => (
-                <div key={c.index}>
-                  <span className="chain-number">{c.index}</span>
-                  <CardName code={c.code} />
-                </div>
-              ))}
+        )}
+        {motion?.type === 'turn' && (
+          <div className="md-turn-cue" key={`${state.turn}-${state.turnPlayer}`}>
+            {state.turnPlayer === seat ? '你的回合' : '对方回合'}
+          </div>
+        )}
+        {motion?.type === 'chain' && (
+          <div className="md-chain-cue" key={`chain-${motion.index}`}>
+            <span>连锁 {motion.index}</span>
+            <CardName code={motion.code} />
+          </div>
+        )}
+        {state.chain.length > 0 && (
+          <div className="md-chain-stack">
+            {state.chain.map((c) => (
+              <div key={c.index}>
+                <span>{c.index}</span>
+                <CardName code={c.code} />
+              </div>
+            ))}
+          </div>
+        )}
+        {browse && (
+          <div className="md-browser">
+            <div className="md-drawer-heading">
+              <h3>
+                {browse.player === seat ? '我方' : '对方'} · {locationLabel[browse.location]}
+              </h3>
+              <button
+                className="icon-button"
+                aria-label="关闭区域列表"
+                onClick={() => setBrowse(null)}
+              >
+                <X size={17} />
+              </button>
             </div>
-          )}
-          <div className="duel-log-preview">
-            <div className="section-heading">
+            <div className="md-browse-cards">
+              {state.players[browse.player].zones[browse.location]
+                ?.filter((c): c is FieldCard => !!c)
+                .map((c, i) => (
+                  <button
+                    key={cardKey(c)}
+                    className={`${options.some((o) => same(o, c)) ? 'eligible' : ''} ${selectedOptions.some((o) => same(o, c)) ? 'selected' : ''}`}
+                    onClick={(e) => activate(c, e)}
+                    onPointerEnter={() => {
+                      if (c.code) setInspect(c.code);
+                    }}
+                  >
+                    <CardImage code={c.code} back={!c.code} />
+                    <small>{c.code ? <CardName code={c.code} /> : '未知卡片'}</small>
+                  </button>
+                ))}
+            </div>
+            {!state.players[browse.player].zones[browse.location]?.length && (
+              <p className="muted">这个区域没有卡片</p>
+            )}
+          </div>
+        )}
+        {prompt && prompt.kind !== 'actions' && !state.ended && (
+          <Selection
+            prompt={prompt}
+            seat={seat}
+            selected={selected}
+            choose={choose}
+            reset={resetSelection}
+            cancel={cancel}
+            respond={respond}
+            locked={locked}
+            canConfirm={canConfirm}
+            count={selectCount}
+            collapsed={collapsed}
+            onCollapse={() => setCollapsed(!collapsed)}
+            inspect={setInspect}
+          />
+        )}
+        {logOpen && (
+          <aside className="md-log">
+            <div className="md-drawer-heading">
               <h3>决斗记录</h3>
               <button
                 className="icon-button"
-                aria-label="展开对局记录"
-                onClick={() => setShowLog(true)}
+                aria-label="关闭记录"
+                onClick={() => setLogOpen(false)}
               >
-                <List size={16} />
+                <X size={17} />
               </button>
             </div>
-            {events.slice(-7).map((e) => (
-              <EventLine key={e.id} event={e} seat={seat} />
-            ))}
+            <div>
+              {events.map((e) => (
+                <EventLine key={e.id} event={e} seat={seat} />
+              ))}
+            </div>
+          </aside>
+        )}
+        {fatal && (
+          <div className="md-fatal">
+            <p>{fatal}</p>
+            <button className="button secondary" onClick={() => send({ type: 'leave' })}>
+              返回单人界面
+            </button>
           </div>
-        </aside>
-      </div>
-      {prompt && prompt.kind !== 'actions' && !state.ended && (
-        <Selection
-          key={prompt.id}
-          prompt={prompt}
-          seat={seat}
-          selected={selected}
-          choose={choose}
-          clear={clearSelection}
-          respond={respond}
-          busy={submitting || !connected}
-          inspect={setInspect}
-        />
-      )}
-      {state.ended && (
-        <div className="duel-result">
-          <span className="eyebrow">DUEL FINISHED</span>
-          <h2>{state.winner === null ? '平局' : state.winner === seat ? '胜利' : '对局结束'}</h2>
-          <p>
-            {state.winner === seat
-              ? '漂亮的决策，值得再来一场。'
-              : '每一场决斗，都是下一次的起点。'}
-          </p>
-          <button className="button primary" onClick={() => send({ type: 'leave' })}>
-            返回大厅
-            <ArrowRight size={17} />
-          </button>
-          <button className="text-button" onClick={() => setShowLog(true)}>
-            查看决斗记录
-          </button>
+        )}
+      </main>
+      {actions.length > 0 && (
+        <div
+          className="md-actions"
+          style={{
+            left: `clamp(12px, ${anchor.x - actions.length * 34}px, calc(100vw - ${actions.length * 68 + 12}px))`,
+            top: Math.max(65, anchor.y - 92),
+          }}
+        >
+          {actions.map((o) => (
+            <button key={o.id} disabled={locked} onClick={() => respond({ ids: [o.id] })}>
+              <span>
+                <ActionIcon action={o.action} />
+              </span>
+              <b>{o.label}</b>
+            </button>
+          ))}
         </div>
       )}
-      {pile && (
-        <Modal title={pile.title} className="pile-modal" onClose={() => setPile(null)}>
-          <div className="pile-card-list">
-            {pile.cards
-              .filter((c): c is FieldCard => !!c)
-              .map((card, i) => (
-                <button
-                  className="pile-list-card"
-                  key={i}
-                  onClick={() => {
-                    if (card.code) {
-                      setInspect(card.code);
-                      setShowInfo(true);
-                    }
-                  }}
-                >
-                  <CardImage code={card.code} back={!card.code} />
-                  <span>{card.code ? <CardName code={card.code} /> : '未知卡片'}</span>
-                </button>
-              ))}
+      {menuOpen && (
+        <div className="md-menu">
+          <div className="md-drawer-heading">
+            <h3>对战菜单</h3>
+            <button
+              className="icon-button"
+              aria-label="关闭对战菜单"
+              onClick={() => setMenuOpen(false)}
+            >
+              <X size={17} />
+            </button>
           </div>
-          {!pile.cards.length && <p className="muted">这个区域没有卡片。</p>}
-          <p className="small muted">点击卡片查看效果。隐藏的卡片只显示卡背。</p>
-        </Modal>
+          <a href={room?.mode === 'online' ? '#online' : '#solo'}>
+            <ArrowLeft size={17} />
+            暂时返回大厅
+          </a>
+          <button
+            onClick={() => {
+              setMenuOpen(false);
+              setShowInfo(true);
+            }}
+          >
+            <Info size={17} />
+            查看卡片
+          </button>
+          <button
+            onClick={() => {
+              if (!state.ended && !confirmLeave) {
+                setConfirmLeave(true);
+                return;
+              }
+              setMenuOpen(false);
+              send({ type: 'leave' });
+            }}
+            className="danger-text"
+          >
+            <Flag size={17} />
+            {state.ended ? '离开对战' : confirmLeave ? '确认认输并离开' : '认输并离开'}
+          </button>
+        </div>
       )}
       {showInfo && (
         <Modal title="卡片详情" className="info-modal" onClose={() => setShowInfo(false)}>
           <CardDetail code={inspect} />
         </Modal>
       )}
-      {showLog && (
-        <Modal title="决斗记录" className="log-modal" onClose={() => setShowLog(false)}>
-          <div className="full-log">
-            {events.map((e) => (
-              <EventLine key={e.id} event={e} seat={seat} />
-            ))}
-          </div>
-        </Modal>
-      )}
-      {confirm && (
-        <Modal title={confirm.title} onClose={() => setConfirm(null)}>
-          <p className="muted">
-            {confirm.title.includes('回合')
-              ? '确认后将继续处理结束阶段的效果。'
-              : '你可以在大厅重新开始一场对局。'}
-          </p>
-          <div className="modal-actions">
-            <button className="button secondary" onClick={() => setConfirm(null)}>
-              取消
-            </button>
-            <button
-              className="button primary"
-              onClick={() => {
-                confirm.action();
-                setConfirm(null);
-              }}
-            >
-              确认
-            </button>
-          </div>
-        </Modal>
+      {state.ended && (
+        <div className="md-result">
+          <span>对战结束</span>
+          <h2>{state.winner === null ? '平局' : state.winner === seat ? '胜利' : '败北'}</h2>
+          <button className="button primary" onClick={() => send({ type: 'leave' })}>
+            返回大厅
+            <ArrowRight size={17} />
+          </button>
+          <button className="text-button" onClick={() => setLogOpen(!logOpen)}>
+            查看记录
+          </button>
+        </div>
       )}
     </div>
   );
 }
-function PlusMark() {
-  return <span>＋</span>;
+function ActionIcon({ action }: { action?: number }) {
+  return action === 10 ? (
+    <Swords size={24} />
+  ) : action === 5 ? (
+    <Sparkles size={24} />
+  ) : action === 3 || action === 4 ? (
+    <Layers3 size={24} />
+  ) : action === 2 ? (
+    <RotateCcw size={24} />
+  ) : (
+    <ArrowUpIcon />
+  );
+}
+function ArrowUpIcon() {
+  return <ArrowRight size={25} style={{ transform: 'rotate(-90deg)' }} />;
+}
+function ChevronRightSmall() {
+  return <ArrowRight size={15} />;
 }
 function CardName({ code }: { code?: number }) {
   const card = useCard(code);
-  return <>{card?.name || (code ? `卡片 ${code}` : '未知卡片')}</>;
+  return <>{card?.name || `卡片 ${code || ''}`}</>;
 }
-function EventLine({ event: e, seat }: { event: GameEvent; seat: number }) {
-  const player = e.player === seat ? '我方' : '对方';
-  let text: React.ReactNode = '';
-  if (e.type === 'turn') text = `${player}回合 · TURN ${e.turn}`;
-  if (e.type === 'phase') text = `进入${phases[e.phase || 0] || '下一'}阶段`;
-  if (e.type === 'summon')
-    text = (
-      <>
-        {player}召唤「
-        <CardName code={e.code} />」
-      </>
-    );
-  if (e.type === 'draw') text = `${player}抽 ${e.count} 张卡`;
-  if (e.type === 'damage') text = `${player} LP −${e.amount}`;
-  if (e.type === 'recover') text = `${player} LP ＋${e.amount}`;
-  if (e.type === 'chain')
-    text = (
-      <>
-        连锁发动「
-        <CardName code={e.code} />」
-      </>
-    );
-  if (e.type === 'resolve') text = '连锁处理中';
-  if (e.type === 'attack') text = '宣言攻击';
-  if (e.type === 'reveal')
-    text = (
-      <>
-        展示：
-        {e.cards?.map((card, i) => (
-          <span key={i}>
-            「<CardName code={card.code} />」
-          </span>
-        ))}
-      </>
-    );
-  if (e.type === 'win') text = e.winner === seat ? '我方获得胜利' : '对局结束';
-  return text ? (
-    <div className={`event-line event-${e.type}`}>
-      <span className="event-dot" />
-      <p>{text}</p>
+function stat(n?: number) {
+  return n === undefined || n < 0 || n > 2147483647 ? '?' : n;
+}
+function PlayerLife({
+  name,
+  lp,
+  own,
+  motion,
+}: {
+  name: string;
+  lp: number;
+  own: boolean;
+  motion: Settings['motion'];
+}) {
+  const [value, setValue] = useState(lp),
+    valueRef = useRef(lp);
+  useEffect(() => {
+    if (motion === 'none' || matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setValue(lp);
+      valueRef.current = lp;
+      return;
+    }
+    const before = valueRef.current,
+      start = performance.now();
+    let request = 0;
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / (motion === 'quick' ? 140 : 320));
+      const next = Math.round(before + (lp - before) * (1 - (1 - t) ** 3));
+      setValue(next);
+      valueRef.current = next;
+      if (t < 1) request = requestAnimationFrame(tick);
+    };
+    request = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(request);
+  }, [lp, motion]);
+  return (
+    <div className={`md-player-life ${own ? 'own' : 'opponent'}`}>
+      <span className="md-player-initial">{name.slice(0, 1)}</span>
+      <div>
+        <strong>{name}</strong>
+        <span className="md-life-value">
+          <small>LP</small>
+          {value.toLocaleString()}
+        </span>
+      </div>
+      <span className="md-life-rule" />
     </div>
+  );
+}
+function AttackLine({
+  root,
+  motion,
+  seat,
+}: {
+  root: React.RefObject<HTMLElement | null>;
+  motion: Motion | null;
+  seat: number;
+}) {
+  const [line, setLine] = useState<{
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+    w: number;
+    h: number;
+  } | null>(null);
+  useEffect(() => {
+    if (motion?.type !== 'attack' || !motion.from) {
+      setLine(null);
+      return;
+    }
+    const table = root.current?.querySelector('.md-table'),
+      from = root.current?.querySelector(`[data-zone-key="${spot(motion.from)}"]`),
+      to = motion.to?.location
+        ? root.current?.querySelector(`[data-zone-key="${spot(motion.to)}"]`)
+        : root.current?.querySelector(
+            motion.from.controller === seat
+              ? '.md-opponent-head .md-player-life'
+              : '.md-own-life .md-player-life',
+          );
+    if (!table || !from || !to) return;
+    const t = table.getBoundingClientRect(),
+      a = from.getBoundingClientRect(),
+      b = to.getBoundingClientRect();
+    setLine({
+      x1: a.left + a.width / 2 - t.left,
+      y1: a.top + a.height / 2 - t.top,
+      x2: b.left + b.width / 2 - t.left,
+      y2: b.top + b.height / 2 - t.top,
+      w: t.width,
+      h: t.height,
+    });
+  }, [motion]);
+  return line ? (
+    <svg className="md-attack-line" viewBox={`0 0 ${line.w} ${line.h}`} aria-hidden="true">
+      <defs>
+        <marker id="attack-tip" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto">
+          <path d="M0 0 L5 2.5 L0 5" fill="none" stroke="currentColor" />
+        </marker>
+      </defs>
+      <path d={`M${line.x1},${line.y1} L${line.x2},${line.y2}`} markerEnd="url(#attack-tip)" />
+    </svg>
   ) : null;
 }
 function Selection({
@@ -696,246 +929,294 @@ function Selection({
   seat,
   selected,
   choose,
-  clear,
+  reset,
+  cancel,
   respond,
-  busy,
+  locked,
+  canConfirm,
+  count,
+  collapsed,
+  onCollapse,
   inspect,
 }: {
   prompt: Prompt;
   seat: number;
   selected: string[];
-  choose: (id: string) => void;
-  clear: () => void;
-  respond: (input: Omit<ResponseInput, 'promptId'>) => void;
-  busy: boolean;
+  choose: (o: Option) => void;
+  reset: () => void;
+  cancel: () => void;
+  respond: (i: Omit<ResponseInput, 'promptId'>) => void;
+  locked: boolean;
+  canConfirm: boolean;
+  count: number;
+  collapsed: boolean;
+  onCollapse: () => void;
   inspect: (code: number) => void;
 }) {
   const [search, setSearch] = useState(''),
-    [counts, setCounts] = useState(p.options.map(() => 0));
-  const incremental = p.kind === 'unselect',
-    visible = p.options
-      .filter((o) => !search || `${o.label} ${o.code}`.includes(search))
-      .slice(0, 100);
-  const valid =
-    selected.length >= p.min &&
-    selected.length <= p.max &&
-    (p.kind !== 'sum' ||
-      sumValid(
-        [...(p.mandatory || []), ...p.options.filter((o) => selected.includes(o.id))],
-        p.amount || 0,
-        p.greater,
-      ));
-  if (p.kind === 'zones')
-    return (
-      <div className="zone-prompt-bar">
-        <div>
-          <b>{p.title}</b>
-          <span className="muted small">
-            点击高亮区域 · 已选 {selected.length} / {p.max}
-          </span>
-        </div>
-        <button className="button secondary" onClick={clear} disabled={busy}>
+    [counts, setCounts] = useState<number[]>([]);
+  const incremental = p.kind === 'unselect';
+  useEffect(() => {
+    setCounts(p.options.map(() => 0));
+    if (p.kind !== 'unselect') setSearch('');
+  }, [p.id]);
+  const visible = p.options
+    .filter((o) =>
+      `${o.label} ${o.code || ''} ${o.description || ''}`
+        .toLowerCase()
+        .includes(search.toLowerCase()),
+    )
+    .slice(0, 160);
+  const footer = (
+    <div className="md-selection-footer">
+      <div>
+        {(p.canCancel || (incremental && (count > 0 || p.options.some((o) => o.selected)))) && (
+          <button className="button secondary" disabled={locked} onClick={cancel}>
+            {p.kind === 'chain' ? '不连锁' : '取消'}
+          </button>
+        )}
+        <button
+          className="text-button"
+          onClick={() => {
+            reset();
+            setCounts(p.options.map(() => 0));
+          }}
+          disabled={locked}
+        >
+          <RotateCcw size={14} />
           重选
         </button>
-        <button
-          className="button primary"
-          disabled={!valid || busy}
-          onClick={() => respond({ ids: selected })}
-        >
-          确认区域
-          <Check size={17} />
-        </button>
+      </div>
+      <span>
+        {incremental
+          ? `已选 ${count} 张`
+          : `${count} / ${p.min === p.max ? p.max : `${p.min}–${p.max}`}`}
+      </span>
+      <button
+        className="button primary"
+        disabled={
+          locked ||
+          (p.kind === 'counter' ? counts.reduce((a, b) => a + b, 0) !== p.amount : !canConfirm)
+        }
+        onClick={() =>
+          respond(
+            incremental
+              ? { materialIds: selected }
+              : p.kind === 'counter'
+                ? { counts }
+                : { ids: selected },
+          )
+        }
+      >
+        {locked ? <LoaderCircle size={16} className="spin" /> : <Check size={16} />}确认
+        {incremental ? '素材' : ''}
+      </button>
+    </div>
+  );
+  if (p.kind === 'zones')
+    return (
+      <div className="md-zone-prompt">
+        <div>
+          <h3>{p.title}</h3>
+          <p>点击场上高亮的区域</p>
+        </div>
+        {footer}
       </div>
     );
   if (p.kind === 'yesno')
     return (
-      <div className="effect-prompt" role="dialog" aria-label={p.title}>
-        <div className="effect-prompt-title">
-          <span className="connection-dot" />
-          <h3>{p.title}</h3>
-        </div>
-        <div className="button-group">
-          {[...p.options].reverse().map((o, i) => (
-            <button
-              key={o.id}
-              className={`button ${i === 0 ? 'secondary' : 'primary'}`}
-              disabled={busy}
-              onClick={() => respond({ ids: [o.id] })}
-            >
-              {i === 0 ? '不发动 / 否' : '发动 / 是'}
-            </button>
-          ))}
-        </div>
-      </div>
-    );
-  return (
-    <div className="selection-overlay">
-      <div
-        className="selection-dialog"
-        role="dialog"
-        aria-label={p.title}
-        aria-modal="true"
-        onContextMenu={(e) => {
-          e.preventDefault();
-          clear();
-        }}
-      >
-        <div className="selection-heading">
-          <div>
-            <span className="eyebrow">
-              {incremental
-                ? 'SELECT MATERIALS'
-                : p.kind === 'chain'
-                  ? 'CHAIN RESPONSE'
-                  : 'MAKE YOUR CHOICE'}
-            </span>
-            <h2>{p.title}</h2>
-          </div>
-          <div className="selection-count">
-            {incremental ? p.options.filter((o) => o.selected).length : selected.length}
-            <span>
-              {' '}
-              已选{!incremental && ` / ${p.min === p.max ? p.max : `${p.min}–${p.max}`}`}
-            </span>
-          </div>
-        </div>
-        {p.kind === 'announce' && (
-          <label className="search-input">
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="搜索卡名或密码"
-              aria-label="搜索宣言卡片"
-            />
-          </label>
-        )}
-        {!!p.mandatory?.length && (
-          <p className="small muted">
-            必选素材：
-            {p.mandatory.map((o, i) => (
-              <span key={i}>
-                「<CardName code={o.code} />」{' '}
-              </span>
-            ))}
-          </p>
-        )}
-        <div
-          className={`selection-options ${visible.some((o) => o.code) ? 'has-cards' : 'text-options'}`}
-        >
-          {visible.map((o, i) =>
-            p.kind === 'counter' ? (
-              <div className="counter-option" key={o.id}>
-                <CardImage code={o.code} />
-                <span>
-                  <CardName code={o.code} />
-                </span>
-                <label>
-                  移除数量
-                  <input
-                    type="number"
-                    min={0}
-                    max={o.capacity}
-                    value={counts[i]}
-                    onChange={(e) =>
-                      setCounts((old) =>
-                        old.map((v, j) =>
-                          j === i
-                            ? Math.max(0, Math.min(o.capacity || 0, Number(e.target.value)))
-                            : v,
-                        ),
-                      )
-                    }
-                  />
-                </label>
-              </div>
-            ) : (
-              <button
-                key={o.id}
-                className={`selection-option ${o.controller === undefined || o.controller === seat ? 'own' : 'opponent'} ${(incremental ? o.selected : selected.includes(o.id)) ? 'selected' : ''} ${o.code ? 'with-card' : ''}`}
-                disabled={busy}
-                onClick={() => {
-                  if (o.code) inspect(o.code);
-                  if (incremental) respond({ ids: [o.id] });
-                  else choose(o.id);
-                }}
-              >
-                {o.code && <CardImage code={o.code} />}
-                <span className="selection-option-label">
-                  {p.kind === 'actions' || p.kind === 'chain' ? (
-                    <>
-                      <CardName code={o.code} />
-                      <small>{o.description || o.label}</small>
-                    </>
-                  ) : (
-                    o.label
-                  )}
-                </span>
-                {o.location && (
-                  <small className="selection-source">
-                    {o.controller === seat ? '我方' : '对方'} · {locationLabel[o.location]}
-                  </small>
-                )}
-                <span className="selection-check">
-                  {p.kind === 'sort' && selected.includes(o.id) ? (
-                    selected.indexOf(o.id) + 1
-                  ) : (
-                    <Check size={13} />
-                  )}
-                </span>
-              </button>
-            ),
-          )}
-        </div>
-        {p.kind === 'sum' && (
-          <p className="selection-hint">目标数值：{p.amount} · 确认前可自由增减素材。</p>
-        )}
-        {p.kind === 'sort' && (
-          <p className="selection-hint">按需要的顺序点击卡片，确认后提交顺序。</p>
-        )}
-        {incremental && (
-          <p className="selection-hint">点击可连续选择或撤回素材，满足条件后统一确认。</p>
-        )}
-        <div className="selection-footer">
-          <div className="button-group">
-            {p.canCancel && (
-              <button
-                className="button secondary"
-                disabled={busy}
-                onClick={() => respond({ cancel: true })}
-              >
-                {p.kind === 'chain' ? '不连锁' : '取消'}
-              </button>
-            )}
-            <button className="text-button" disabled={busy} onClick={clear}>
-              <RotateCcw size={15} />
-              清空选择
-            </button>
-          </div>
+      <div className="md-effect-question" role="dialog" aria-label={p.title}>
+        <h3>{p.title}</h3>
+        <div>
+          <button
+            className="button secondary"
+            disabled={locked}
+            onClick={() => respond({ ids: [p.options[1].id] })}
+          >
+            否
+          </button>
           <button
             className="button primary"
-            disabled={
-              busy ||
-              (incremental
-                ? !p.canFinish
-                : p.kind === 'counter'
-                  ? counts.reduce((a, b) => a + b, 0) !== p.amount
-                  : !valid)
-            }
-            onClick={() =>
-              respond(
-                incremental
-                  ? { finish: true }
-                  : p.kind === 'counter'
-                    ? { counts }
-                    : { ids: selected },
-              )
-            }
+            disabled={locked}
+            onClick={() => respond({ ids: [p.options[0].id] })}
           >
-            {busy ? <LoaderCircle size={16} className="spin" /> : <Check size={16} />}确认
-            {incremental ? '素材' : '选择'}
+            是<Check size={16} />
           </button>
         </div>
       </div>
-    </div>
+    );
+  const buckets = new Map<string, Option[]>();
+  for (const o of visible) {
+    const key = o.location
+      ? `${o.controller === seat ? '我方' : '对方'} · ${locationLabel[o.location] || '卡片'}`
+      : '';
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push(o);
+  }
+  return (
+    <section
+      className={`md-selection ${p.kind === 'chain' && p.options.length <= 2 ? 'compact' : ''} ${collapsed ? 'collapsed' : ''}`}
+      style={
+        {
+          '--selection-width': `${Math.min(920, Math.max(500, p.options.length * 112 + 42))}px`,
+        } as React.CSSProperties
+      }
+      role="dialog"
+      aria-label={p.title}
+    >
+      <div className="md-drawer-heading">
+        <h3>
+          {p.title}
+          {p.kind === 'sum' && <small>数值 {p.amount}</small>}
+        </h3>
+        <button
+          className="icon-button"
+          aria-label={collapsed ? '展开候选卡片' : '收起候选卡片'}
+          onClick={onCollapse}
+        >
+          {collapsed ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+        </button>
+      </div>
+      {!collapsed && (
+        <>
+          {p.kind === 'announce' && (
+            <label className="search-input">
+              <Search size={17} />
+              <input
+                aria-label="搜索宣言卡片"
+                placeholder="搜索卡名或密码"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </label>
+          )}
+          {!!p.mandatory?.length && (
+            <p className="md-mandatory">
+              必选：
+              {p.mandatory.map((o, i) => (
+                <span key={i}>
+                  「<CardName code={o.code} />」
+                </span>
+              ))}
+            </p>
+          )}
+          <div
+            className={`md-candidates ${visible.some((o) => o.code) ? 'has-cards' : 'text-only'}`}
+            onWheel={(e) => {
+              const el = e.currentTarget;
+              if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && el.scrollWidth > el.clientWidth + 2) {
+                el.scrollLeft += e.deltaY;
+              }
+            }}
+          >
+            {[...buckets].map(([title, items]) => (
+              <div className="md-candidate-group" key={title}>
+                {title && <h4>{title}</h4>}
+                <div>
+                  {items.map((o) => {
+                    const chosen = incremental
+                      ? !!o.selected !== selected.includes(o.id)
+                      : selected.includes(o.id);
+                    return p.kind === 'counter' ? (
+                      <div className="md-counter" key={optionKey(o)}>
+                        <CardImage code={o.code} />
+                        <label>
+                          <CardName code={o.code} />
+                          <input
+                            type="number"
+                            min={0}
+                            max={o.capacity}
+                            value={counts[Number(o.id)] || 0}
+                            onChange={(e) =>
+                              setCounts((old) =>
+                                p.options.map((x, i) =>
+                                  i === Number(o.id)
+                                    ? Math.max(0, Math.min(o.capacity || 0, Number(e.target.value)))
+                                    : old[i] || 0,
+                                ),
+                              )
+                            }
+                          />
+                        </label>
+                      </div>
+                    ) : (
+                      <button
+                        className={`md-candidate ${o.controller === seat || o.controller === undefined ? 'own' : 'opponent'} ${chosen ? 'selected' : ''} ${o.code ? 'with-card' : ''}`}
+                        key={optionKey(o)}
+                        disabled={locked}
+                        onClick={() => choose(o)}
+                        onPointerEnter={() => {
+                          if (o.code) inspect(o.code);
+                        }}
+                      >
+                        {o.code && <CardImage code={o.code} />}
+                        <span className="md-candidate-label">
+                          {p.kind === 'chain' ? (
+                            <>
+                              <CardName code={o.code} />
+                              {o.description && <small>{o.description}</small>}
+                            </>
+                          ) : (
+                            o.label
+                          )}
+                        </span>
+                        {chosen && (
+                          <span className="md-selected-mark">
+                            {p.kind === 'sort' ? selected.indexOf(o.id) + 1 : <Check size={15} />}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      {footer}
+    </section>
   );
+}
+function EventLine({ event: e, seat }: { event: GameEvent; seat: number }) {
+  const player = e.player === seat ? '我方' : '对方';
+  let text: React.ReactNode = '';
+  if (e.type === 'turn') text = `${player}回合 · ${e.turn}`;
+  if (e.type === 'phase') text = `${phases[e.phase || 0] || '阶段切换'}`;
+  if (e.type === 'draw') text = `${player}抽 ${e.count} 张卡`;
+  if (e.type === 'summon')
+    text = (
+      <>
+        {player}召唤「
+        <CardName code={e.code} />」
+      </>
+    );
+  if (e.type === 'damage') text = `${player} LP −${e.amount}`;
+  if (e.type === 'recover') text = `${player} LP +${e.amount}`;
+  if (e.type === 'chain')
+    text = (
+      <>
+        连锁「
+        <CardName code={e.code} />」
+      </>
+    );
+  if (e.type === 'win') text = e.winner === seat ? '我方胜利' : '对战结束';
+  if (e.type === 'server') text = e.text;
+  if (e.type === 'attack') text = '宣言攻击';
+  if (e.type === 'reveal')
+    text = (
+      <>
+        展示{' '}
+        {e.cards?.map((c, i) => (
+          <span key={i}>
+            「<CardName code={c.code} />」
+          </span>
+        ))}
+      </>
+    );
+  return text ? (
+    <div className={`md-event ${e.type}`}>
+      <p>{text}</p>
+    </div>
+  ) : null;
 }

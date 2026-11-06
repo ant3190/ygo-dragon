@@ -1,6 +1,6 @@
 {
   "name": "ygo-dragon",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -15,10 +15,12 @@
     "check": "npm run build && npm test",
     "resources:sync": "node --env-file-if-exists=.env scripts/sync.mjs",
     "test:duel": "node --env-file-if-exists=.env scripts/smoke-duel.mjs",
-    "test:room": "node --env-file-if-exists=.env scripts/smoke-room.mjs"
+    "test:room": "node --env-file-if-exists=.env scripts/smoke-room.mjs",
+    "test:ai": "node scripts/smoke-ai.mjs"
   },
   "dependencies": {
     "adm-zip": "0.5.16",
+    "https-proxy-agent": "^7.0.6",
     "lucide-react": "0.468.0",
     "ocgcore-wasm": "0.1.6",
     "react": "19.2.0",

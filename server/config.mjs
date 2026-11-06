@@ -18,6 +18,8 @@ export function loadConfig(env = process.env) {
     interval: Math.max(1, Number(env.YGO_CHECK_INTERVAL_HOURS) || 6) * 3600000,
     autoUpdate: env.YGO_AUTO_UPDATE !== '0',
     origins: list(env.YGO_ALLOWED_ORIGINS, []),
+    aiServer: env.YGO_AI_SERVER || 'wss://koishi.momobako.com:7211',
+    aiVersion: Number(env.YGO_AI_VERSION || 4962),
     database: list(env.YGO_DATABASE_URLS, [
       'https://cdncf.moecube.com/ygopro-database/zh-CN/cards.cdb',
       'https://cdn02.moecube.com:444/ygopro-database/zh-CN/cards.cdb',

@@ -129,7 +129,7 @@ export function makePrompt(message, catalog, id) {
       prompt.specialCount = m.spe_count;
       m.selects.forEach((c, index) =>
         add('连锁发动', { type: R.SELECT_CHAIN, index }, c, {
-          description: catalog.description(c.description),
+          description: c.description ? catalog.description(c.description) : '',
         }),
       );
       break;

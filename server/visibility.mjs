@@ -17,6 +17,7 @@ export function visibleCard(card, viewer) {
       location: card.location,
       sequence: card.sequence,
       position: card.position,
+      uid: card.uid,
       hidden: true,
     };
   return { ...card };

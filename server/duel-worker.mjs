@@ -12,6 +12,9 @@ import { Catalog, coreCard } from './catalog.mjs';
 import { makePrompt } from './prompts.mjs';
 import { visibleState } from './visibility.mjs';
 import { chooseBot } from './bot.mjs';
+import { DuelModel, motionDuration } from './duel-model.mjs';
+import { SelectionReset } from './selection-reset.mjs';
+import { MaterialCommit } from './material-commit.mjs';
 
 const catalog = new Catalog(workerData.snapshot.database, workerData.strings);
 const core = await createCore({ sync: true });
@@ -24,13 +27,18 @@ const state = {
   winner: null,
   players: [0, 1].map((player) => ({ player, lp: 8000, zones: {} })),
 };
+const presentation = new DuelModel(
+  catalog,
+  workerData.decks.map((d) => ({ deck: d.main.length, extra: d.extra.length })),
+);
 let pending = null,
   serial = 0,
   closed = false,
   botTimer,
   lastResponse,
-  lastPending,
-  clearing = false;
+  lastPending;
+const selectionReset = new SelectionReset();
+const materialCommit = new MaterialCommit();
 const scripts = new Map();
 function script(name) {
   if (scripts.has(name)) return scripts.get(name);
@@ -106,6 +114,10 @@ function refresh() {
 }
 function send() {
   refresh();
+  presentation.reconcile(structuredClone(state));
+  for (let p = 0; p < 2; p++)
+    for (const l of [1, 2, 4, 8, 16, 32, 64])
+      state.players[p].zones[l] = presentation.state.players[p].zones[l];
   for (let viewer = 0; viewer < 2; viewer++)
     parentPort.postMessage({
       type: 'view',
@@ -123,6 +135,18 @@ function event(type, info = {}, viewers = [0, 1]) {
 }
 function processMessages(messages) {
   for (const m of messages) {
+    if (![M.UPDATE_DATA, M.UPDATE_CARD].includes(m.type)) {
+      const motion = presentation.apply(m);
+      if (motion)
+        for (let viewer = 0; viewer < 2; viewer++)
+          parentPort.postMessage({
+            type: 'frame',
+            viewer,
+            state: visibleState(presentation.state, viewer),
+            motion,
+            duration: motionDuration(motion),
+          });
+    }
     const next = makePrompt(m, catalog, ++serial);
     if (next) {
       pending = next;
@@ -131,7 +155,8 @@ function processMessages(messages) {
     if (m.type === M.RETRY) {
       if (!lastPending) throw new Error('规则核心未提供可恢复的选择');
       pending = lastPending;
-      clearing = false;
+      selectionReset.stop();
+      materialCommit.stop();
       parentPort.postMessage({
         type: 'input-error',
         player: pending.prompt.player,
@@ -195,14 +220,18 @@ function pump() {
     }
     if (status === OcgProcessResult.WAITING) {
       if (!pending) throw new Error('规则核心等待未支持的响应');
-      if (clearing && pending.prompt.kind === 'unselect') {
-        const option = pending.prompt.options.find((o) => o.selected);
-        if (option) {
-          reply(pending.prompt.player, { promptId: pending.prompt.id, ids: [option.id] });
-          return;
-        }
+      const undo = materialCommit.next(pending.prompt) || selectionReset.next(pending.prompt);
+      if (undo) {
+        reply(pending.prompt.player, undo);
+        return;
       }
-      clearing = false;
+      const notice = materialCommit.takeNotice() || selectionReset.takeNotice();
+      if (notice)
+        parentPort.postMessage({
+          type: 'input-error',
+          player: pending.prompt.player,
+          message: notice,
+        });
       if (
         pending.prompt.kind === 'chain' &&
         !pending.prompt.options.length &&
@@ -226,16 +255,9 @@ function pump() {
 function reply(player, input) {
   if (!pending || pending.prompt.player !== player || state.ended) return;
   try {
-    if (input.clear && input.promptId === pending.prompt.id && pending.prompt.kind === 'unselect') {
-      clearing = true;
-      const option = pending.prompt.options.find((o) => o.selected);
-      if (!option) {
-        clearing = false;
-        send();
-        return;
-      }
-      input = { promptId: pending.prompt.id, ids: [option.id] };
-    }
+    input = selectionReset.begin(pending.prompt, input);
+    if (input) input = materialCommit.begin(pending.prompt, input);
+    if (!input) return send();
     lastResponse = pending.resolve(input);
     lastPending = pending;
     pending = null;
