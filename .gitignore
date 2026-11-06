@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+data/
+coverage/
+.openai/
+*.tsbuildinfo
+test-results/
+playwright-report/
+empty-legacy/

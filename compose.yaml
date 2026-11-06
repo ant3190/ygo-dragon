@@ -1,0 +1,15 @@
+services:
+  dragon:
+    build: .
+    restart: unless-stopped
+    init: true
+    ports:
+      - '${YGO_PORT:-18081}:18081'
+    env_file: .env
+    environment:
+      YGO_DATA_DIR: /data
+      YGO_PORT: 18081
+      YGO_LEGACY_DATA_DIR: /legacy
+    volumes:
+      - '${YGO_DATA_DIR:?请先在 .env 中设置项目外的数据目录}:/data'
+      - '${YGO_LEGACY_DATA_DIR:-./empty-legacy}:/legacy:ro'
