@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
 const env = { ...process.env, YGO_PORT: '18082', YGO_DEV: '1' };
+const rpsPreview = env.YGO_PREVIEW_RPS === '1';
+if (rpsPreview) env.YGO_AI_SERVER = 'ws://127.0.0.1:18090';
 // Vite forwards HTTP API calls and WebSocket upgrades differently. Permit only
 // the loopback development origins; production keeps its same-origin checks.
 env.YGO_ALLOWED_ORIGINS ||=
@@ -7,6 +9,9 @@ env.YGO_ALLOWED_ORIGINS ||=
 if (!env.YGO_DATA_DIR)
   env.YGO_DATA_DIR = new URL('../../ygo-dragon-data', import.meta.url).pathname;
 const children = [
+  ...(rpsPreview
+    ? [spawn(process.execPath, ['scripts/preview-rps.mjs'], { stdio: 'inherit', env })]
+    : []),
   spawn(process.execPath, ['server/index.mjs'], { stdio: 'inherit', env }),
   spawn('npm', ['run', 'dev:client', '--', ...process.argv.slice(2)], { stdio: 'inherit' }),
 ];

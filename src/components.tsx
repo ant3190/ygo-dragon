@@ -12,14 +12,16 @@ export function CardImage({
   back?: boolean;
   eager?: boolean;
 }) {
-  const card = useCard(back ? undefined : code),
+  const faceDown = back || !code;
+  const card = useCard(faceDown ? undefined : code),
     [errorCode, setErrorCode] = useState<number>(),
     [loadedCode, setLoadedCode] = useState<number>();
   const error = !!code && errorCode === code,
     loaded = !!code && loadedCode === code;
   return (
-    <span className={`card-image ${back || !code ? 'card-back' : ''}`}>
-      {!!code && !back && !error && (
+    <span className={`card-image ${faceDown ? 'card-back' : ''}`}>
+      {faceDown && <img src="/card-back.jpg" alt="游戏王卡背" draggable={false} />}
+      {!!code && !faceDown && !error && (
         <img
           key={code}
           src={`/api/images/${code}.jpg`}
@@ -31,23 +33,10 @@ export function CardImage({
           onError={() => setErrorCode(code)}
         />
       )}
-      {(!loaded || error || back || !code) && (
+      {!faceDown && (!loaded || error) && (
         <span className="card-placeholder">
           <CreditCard size={22} strokeWidth={1} />
-          {!back && <small>{card?.name || code || '卡片'}</small>}
-        </span>
-      )}
-      {back && (
-        <span className="back-mark" aria-hidden="true">
-          <svg viewBox="0 0 48 64" fill="none">
-            <path d="M24 5 40 16 36 42 24 57 12 42 8 16Z" stroke="currentColor" strokeWidth=".7" />
-            <path d="m25 14-10 16 9-4-5 17 13-17-10 5 8-14" fill="currentColor" opacity=".75" />
-            <path
-              d="M14 17h7M27 48h7M13 45l-2-16M37 19l2 16"
-              stroke="currentColor"
-              strokeWidth=".5"
-            />
-          </svg>
+          <small>{card?.name || code || '卡片'}</small>
         </span>
       )}
     </span>

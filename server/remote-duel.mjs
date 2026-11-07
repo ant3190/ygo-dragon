@@ -17,6 +17,7 @@ import { DuelModel, motionDuration } from './duel-model.mjs';
 import { visibleState } from './visibility.mjs';
 import { SelectionReset } from './selection-reset.mjs';
 import { MaterialCommit } from './material-commit.mjs';
+import { rpsChoices, rpsOutcome } from '../shared/rps.mjs';
 
 // A persistent upstream socket belongs to one local room, independent of browser reconnects.
 export class RemoteDuel extends EventEmitter {
@@ -34,6 +35,7 @@ export class RemoteDuel extends EventEmitter {
       { deck: deck.main.length, extra: deck.extra.length },
       { deck: 40, extra: 0 },
     ]);
+    this.model.state.opening = { stage: 'connecting', round: 0 };
     const local = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(config.aiServer).hostname);
     const proxy = !local && (process.env.HTTPS_PROXY || process.env.https_proxy);
     this.socket = new WebSocket(config.aiServer, {
@@ -106,11 +108,7 @@ export class RemoteDuel extends EventEmitter {
     if (type === 3) {
       this.choice(
         '猜拳',
-        [
-          ['石头', 1],
-          ['剪刀', 2],
-          ['布', 3],
-        ],
+        rpsChoices.map(({ label, value }) => [label, value]),
         3,
       );
       return;
@@ -124,6 +122,29 @@ export class RemoteDuel extends EventEmitter {
         ],
         4,
       );
+      return;
+    }
+    if (type === 5 && data.length >= 2) {
+      const mine = data[0],
+        opponent = data[1],
+        outcome = rpsOutcome(mine, opponent);
+      if (!outcome) return;
+      this.model.state.opening = {
+        ...this.model.state.opening,
+        stage: 'rps-result',
+        mine,
+        opponent,
+        outcome,
+      };
+      this.pending = null;
+      this.emitMessage({
+        type: 'frame',
+        viewer: 0,
+        state: visibleState(this.model.state, 0),
+        motion: { type: 'rps' },
+        duration: 1000,
+      });
+      this.send();
       return;
     }
     if (type === 24) {
@@ -149,6 +170,7 @@ export class RemoteDuel extends EventEmitter {
     if (type !== 1) return;
     const m = readGame(data);
     if (m.type === M.START) {
+      delete this.model.state.opening;
       this.human = m.playerType & 1;
       this.started = true;
       clearTimeout(this.timeout);
@@ -235,11 +257,20 @@ export class RemoteDuel extends EventEmitter {
   choice(title, options, type) {
     clearTimeout(this.timeout);
     const id = ++this.serial;
+    const previous = this.model.state.opening;
+    this.model.state.opening =
+      type === 3
+        ? {
+            stage: 'rps',
+            round: (previous?.round || 0) + 1,
+            previousDraw: previous?.outcome === 'draw',
+          }
+        : { ...previous, stage: 'turn-order' };
     this.pending = {
       prompt: {
         id,
         player: 0,
-        kind: 'choice',
+        kind: type === 3 ? 'rps' : 'turn-order',
         title,
         min: 1,
         max: 1,
@@ -277,6 +308,14 @@ export class RemoteDuel extends EventEmitter {
       if (input) input = this.materialCommit.begin(this.pending.prompt, input);
       if (!input) return this.send();
       const response = this.pending.resolve(input);
+      if (response.wireType === 3)
+        this.model.state.opening = {
+          ...this.model.state.opening,
+          stage: 'rps-wait',
+          mine: response.value,
+        };
+      if (response.wireType === 4)
+        this.model.state.opening = { ...this.model.state.opening, stage: 'starting' };
       if (response.wireType) this.write(response.wireType, Buffer.from([response.value]));
       else this.write(1, legacyResponse(response, this.human));
       this.lastPending = this.pending;

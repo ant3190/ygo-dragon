@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DuelState, Prompt, Motion, Settings } from '../types';
+import { presentationDuration } from '../../shared/motion.mjs';
 interface Snapshot {
   type: 'view' | 'frame';
   state: DuelState;
@@ -37,8 +38,9 @@ export function useDuelPlayback(speed: Settings['motion']) {
     });
     const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
     const factor = mode.current === 'none' || reduce ? 0 : mode.current === 'quick' ? 0.5 : 1;
-    const duration = Math.min(next.duration || 0, queue.current.length > 10 ? 70 : 500) * factor;
-    timer.current = setTimeout(advance, duration);
+    const duration = Math.min(next.duration ?? presentationDuration(next.motion), 1500) * factor;
+    // Let each snapshot paint; backlogs must not collapse effects into 70ms flashes.
+    timer.current = setTimeout(advance, Math.max(16, duration));
   }, []);
   const receive = useCallback(
     (next: Snapshot) => {

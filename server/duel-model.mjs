@@ -189,7 +189,13 @@ export class DuelModel {
       case M.SUMMONING:
       case M.SPSUMMONING:
       case M.FLIPSUMMONING:
-        motion = { type: 'summon', code: m.code, player: m.controller };
+        motion = {
+          type: 'summon',
+          code: m.code,
+          player: m.controller,
+          uid: this.at(m)?.uid,
+          from: { controller: m.controller, location: m.location, sequence: m.sequence },
+        };
         break;
       case M.ATTACK:
         motion = { type: 'attack', from: m.attacker, to: m.defender };
@@ -204,7 +210,13 @@ export class DuelModel {
         break;
       case M.CHAINING:
         s.chain.push({ code: m.code, controller: m.controller, index: m.chain_size });
-        motion = { type: 'chain', code: m.code, index: m.chain_size };
+        motion = {
+          type: 'chain',
+          code: m.code,
+          index: m.chain_size,
+          uid: this.at(m)?.uid,
+          from: { controller: m.controller, location: m.location, sequence: m.sequence },
+        };
         break;
       case M.CHAIN_SOLVING:
         motion = { type: 'resolve', index: m.chain_size };
@@ -304,20 +316,4 @@ export class DuelModel {
     this.state = state;
   }
 }
-export function motionDuration(motion) {
-  return (
-    {
-      move: 240,
-      draw: 230,
-      position: 200,
-      attack: 320,
-      summon: 300,
-      chain: 380,
-      resolve: 300,
-      damage: 250,
-      recover: 180,
-      turn: 420,
-      win: 300,
-    }[motion?.type] || 0
-  );
-}
+export { presentationDuration as motionDuration } from '../shared/motion.mjs';

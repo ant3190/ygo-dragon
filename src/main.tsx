@@ -19,11 +19,14 @@ import { Decks } from './pages/Decks';
 import { Play } from './pages/Play';
 import { SettingsPage } from './pages/Settings';
 import { Duel } from './pages/Duel';
+import { Opening } from './duel/Opening';
 import { useDuelPlayback } from './duel/playback';
 import { useHash } from './lib';
 import type { Deck, GameEvent, ResourceStatus, Room, Settings } from './types';
 import './styles.css';
 import './duel/duel.css';
+import './duel/field.css';
+import './duel/effects.css';
 
 const defaults: Settings = {
   name: '决斗者',
@@ -231,6 +234,17 @@ function App() {
             重新连接
           </button>
         </div>
+      ) : inDuel && playback.game?.opening ? (
+        <Opening
+          opening={playback.game.opening}
+          prompt={playback.prompt}
+          room={room}
+          name={settings.name}
+          connected={connected}
+          send={send}
+          fatal={fatal}
+          inputEpoch={inputEpoch}
+        />
       ) : inDuel ? (
         <Duel
           state={playback.game!}
