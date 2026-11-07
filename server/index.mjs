@@ -242,7 +242,7 @@ const server = http.createServer(async (req, res) => {
       method = req.method;
     if (method !== 'GET' && !sameOrigin(req)) return json(res, { error: '不允许跨站请求' }, 403);
     if (route === '/api/health')
-      return json(res, { ok: true, ready: resources.status.ready, version: '0.2.0' });
+      return json(res, { ok: true, ready: resources.status.ready, version: '0.3.0' });
     if (/^\/api\/images\/\d+\.jpg$/.test(route)) {
       try {
         const code = Number(route.match(/(\d+)\.jpg$/)[1]);
