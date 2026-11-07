@@ -1,0 +1,121 @@
+.md-in-flight {
+  opacity: 0 !important;
+}
+.md-card-flight {
+  pointer-events: none;
+  max-width: none;
+  filter: drop-shadow(0 6px 9px #0006);
+}
+.md-card-flight .card-image {
+  height: 100%;
+  width: 100%;
+  border-radius: 2px;
+}
+.md-event-effect {
+  position: absolute;
+  inset: -4px;
+  border: 2px solid #efcf85;
+  border-radius: 5px;
+  box-shadow:
+    0 0 9px #f4cd7599,
+    inset 0 0 12px #f4cd7544;
+  pointer-events: none;
+  z-index: 9;
+}
+.md-event-effect.activation {
+  border-color: #ffe5a0;
+  box-shadow:
+    0 0 14px #edc25a99,
+    inset 0 0 20px #edc25a55;
+}
+.md-event-effect.resolve {
+  border-color: #b4e8ff;
+  box-shadow:
+    0 0 14px #7acbeb77,
+    inset 0 0 20px #7acbeb44;
+}
+.md-event-effect.hit,
+.md-event-effect.damage {
+  border-color: #f3b5b3;
+  box-shadow:
+    0 0 16px #e4767888,
+    inset 0 0 20px #e4767855;
+}
+.md-event-effect.recover {
+  border-color: #a8dfc6;
+  box-shadow:
+    0 0 15px #67c49a77,
+    inset 0 0 20px #67c49a44;
+}
+.md-player-life {
+  position: relative;
+}
+.md-life-float {
+  z-index: 90;
+  pointer-events: none;
+  color: #f0afa9;
+  font-size: 30px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-shadow: 0 2px 6px #000b;
+  white-space: nowrap;
+}
+.md-life-float.recover {
+  color: #a8dfc6;
+}
+.md-attack-line > path {
+  stroke-width: 4;
+  color: #c2e1f2;
+  filter: drop-shadow(0 0 4px #8bc6e599);
+  animation:
+    attack-dash 0.52s linear,
+    attack-fade 0.52s ease-in-out both;
+}
+.md-turn-cue {
+  animation: turn-arrive 0.56s cubic-bezier(0.2, 0.65, 0.25, 1) both;
+}
+.md-chain-cue {
+  animation: chain-arrive 0.52s ease both;
+}
+@keyframes attack-fade {
+  0% {
+    opacity: 0;
+  }
+  20%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes turn-arrive {
+  0% {
+    opacity: 0;
+    margin-left: -28px;
+  }
+  25%,
+  75% {
+    opacity: 1;
+    margin-left: 0;
+  }
+  100% {
+    opacity: 0;
+    margin-left: 15px;
+  }
+}
+@keyframes chain-arrive {
+  0% {
+    opacity: 0;
+    margin-top: 10px;
+  }
+  20%,
+  78% {
+    opacity: 1;
+    margin-top: 0;
+  }
+  100% {
+    opacity: 0;
+    margin-top: -5px;
+  }
+}

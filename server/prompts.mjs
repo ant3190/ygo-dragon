@@ -1,5 +1,6 @@
 import { OcgMessageType as M, OcgResponseType as R, cardMatchesOpcode } from 'ocgcore-wasm';
 import { coreCard } from './catalog.mjs';
+import { rpsChoices } from '../shared/rps.mjs';
 
 export function fieldPlaces(mask, player) {
   const out = [];
@@ -230,9 +231,7 @@ export function makePrompt(message, catalog, id) {
       break;
     case M.ROCK_PAPER_SCISSORS:
       prompt.title = '猜拳';
-      ['石头', '剪刀', '布'].forEach((label, i) =>
-        add(label, { type: R.ROCK_PAPER_SCISSORS, value: i + 1 }),
-      );
+      rpsChoices.forEach(({ label, value }) => add(label, { type: R.ROCK_PAPER_SCISSORS, value }));
       break;
     case M.ANNOUNCE_ATTRIB:
     case M.ANNOUNCE_RACE: {

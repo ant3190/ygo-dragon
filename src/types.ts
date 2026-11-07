@@ -64,6 +64,7 @@ export interface Player {
   zones: Record<string, (FieldCard | null)[]>;
 }
 export interface DuelState {
+  opening?: OpeningState;
   players: Player[];
   turn: number;
   turnPlayer: number;
@@ -72,7 +73,16 @@ export interface DuelState {
   ended: boolean;
   winner: number | null;
 }
+export interface OpeningState {
+  stage: 'connecting' | 'rps' | 'rps-wait' | 'rps-result' | 'turn-order' | 'starting';
+  round: number;
+  mine?: number;
+  opponent?: number;
+  outcome?: 'win' | 'lose' | 'draw';
+  previousDraw?: boolean;
+}
 export interface Option extends Partial<FieldCard> {
+  value?: number;
   id: string;
   label: string;
   description?: string;
@@ -98,6 +108,7 @@ export interface Prompt {
   greater?: boolean;
   mandatory?: Option[];
   tribute?: boolean;
+  tributeMin?: number;
 }
 export interface Room {
   opponent?: string;

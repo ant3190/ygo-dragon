@@ -23,6 +23,7 @@ import {
 import { CardDetail, CardImage, Modal } from '../components';
 import { locationLabel, phases, sumValid, useCard } from '../lib';
 import { useCardMotion } from '../duel/motion';
+import { cardAvailability, type Availability } from '../duel/availability';
 import type { Send } from '../main';
 import type {
   DuelState,
@@ -158,6 +159,9 @@ export function Duel({
       ? !!prompt.canFinish || selected.length > 0
       : selected.length >= prompt.min &&
         selected.length <= prompt.max &&
+        (!prompt.tribute ||
+          selectedOptions.reduce((total, option) => total + (option.release_param || 1), 0) >=
+            (prompt.tributeMin ?? prompt.min)) &&
         (prompt.kind !== 'sum' ||
           sumValid(
             [...(prompt.mandatory || []), ...selectedOptions],
@@ -322,6 +326,9 @@ export function Duel({
           ? options.find((o) => same(o, { controller: player, location, sequence }))
           : undefined;
     const chosen = option && selectedOptions.some((o) => o.id === option.id),
+      available = locked
+        ? undefined
+        : cardAvailability(prompt, { controller: player, location, sequence }),
       usable =
         prompt?.kind === 'actions' &&
         options.some((o) => same(o, { controller: player, location, sequence }));
@@ -332,6 +339,8 @@ export function Duel({
         data-zone-key={`${player}-${location}-${sequence}`}
         data-card-spot={card ? spot(card) : undefined}
         aria-label={`${player === seat ? '我方' : '对方'}${location === 4 ? '怪兽' : '魔法陷阱'}区 ${sequence + 1}${card?.code ? `，卡片 ${card.code}` : ''}`}
+        aria-description={available?.description}
+        title={available?.description}
         onClick={(e) =>
           card
             ? activate({ ...card, controller: player, location, sequence }, e)
@@ -347,10 +356,11 @@ export function Duel({
               <div
                 className="md-card-rotation"
                 style={{
-                  transform: `rotate(${(player === seat ? 0 : 180) + (card.position & 12 ? -90 : 0)}deg)`,
+                  transform: `rotate(${(player === seat ? 0 : 180) + (location === 4 && card.position & 12 ? -90 : 0)}deg)`,
                 }}
               >
                 <CardImage code={card.code} back={!card.code || !(card.position & 5)} />
+                <ActionFrame available={available} />
               </div>
             </div>
             {location === 4 && !!(card.position & 5) && (
@@ -368,13 +378,11 @@ export function Duel({
         ) : (
           <span className="md-zone-corners">
             <small>
-              {location === 4
-                ? sequence > 4
-                  ? 'EX'
-                  : `M${sequence + 1}`
-                : sequence === 5
+              {location === 4 && sequence > 4
+                ? 'EX'
+                : location === 8 && sequence === 5
                   ? '场地'
-                  : `S${sequence + 1}`}
+                  : ''}
             </small>
           </span>
         )}
@@ -390,11 +398,16 @@ export function Duel({
   const pile = (player: number, location: number, name: string) => {
     const cards = state.players[player].zones[location] || [],
       top = cards.filter(Boolean).at(-1),
+      available = locked
+        ? undefined
+        : cardAvailability(prompt, { controller: player, location }, true),
       eligible = options.some((o) => o.controller === player && o.location === location);
     return (
       <button
         className={`md-pile ${player === seat ? 'own' : 'opponent'} ${eligible ? 'selectable' : ''}`}
         aria-label={`查看${player === seat ? '我方' : '对方'}${name}，${cards.filter(Boolean).length}张`}
+        aria-description={available?.description}
+        title={available?.description}
         data-zone-key={`${player}-${location}`}
         onClick={() => {
           setBrowse({ player, location });
@@ -412,6 +425,7 @@ export function Duel({
                   code={top.code}
                   back={location === 1 || !top.code || !!(top.position & 10)}
                 />
+                <ActionFrame available={available} />
               </div>
             </div>
           ) : (
@@ -503,6 +517,7 @@ export function Duel({
   return (
     <div
       ref={root}
+      data-seat={seat}
       className={`md-duel ${locked ? 'locked' : ''}`}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -580,26 +595,26 @@ export function Duel({
           </div>
         </div>
         <section className="md-table" aria-label="对战场地">
-          <div className="md-mat-divider" />
-          {fieldSide(1 - seat, true)}
-          <div className="md-extra-row">
-            {[5, 6].map((seq, i) => {
-              const opposite = seq === 5 ? 6 : 5;
-              const otherCard = other.zones[4]?.[opposite];
-              const oppAvailable =
-                prompt?.kind === 'zones' &&
-                options.some((o) =>
-                  same(o, { controller: 1 - seat, location: 4, sequence: opposite }),
+          <div className="md-board-grid">
+            {fieldSide(1 - seat, true)}
+            <div className="md-extra-row">
+              {[5, 6].map((seq, i) => {
+                const opposite = seq === 5 ? 6 : 5;
+                const otherCard = other.zones[4]?.[opposite];
+                const oppAvailable =
+                  prompt?.kind === 'zones' &&
+                  options.some((o) =>
+                    same(o, { controller: 1 - seat, location: 4, sequence: opposite }),
+                  );
+                return (
+                  <div className={`md-extra-slot extra-${i}`} key={seq}>
+                    {otherCard || oppAvailable ? tile(1 - seat, 4, opposite) : tile(seat, 4, seq)}
+                  </div>
                 );
-              return (
-                <div className={`md-extra-slot extra-${i}`} key={seq}>
-                  {otherCard || oppAvailable ? tile(1 - seat, 4, opposite) : tile(seat, 4, seq)}
-                </div>
-              );
-            })}
+              })}
+            </div>
+            {fieldSide(seat, false)}
           </div>
-          {fieldSide(seat, false)}
-
           <AttackLine root={root} motion={motion} seat={seat} />
         </section>
         <div className="md-hand" aria-label="我方手牌">
@@ -620,6 +635,9 @@ export function Duel({
                     key={cardKey(card)}
                     aria-label={`手牌 ${card.code || i}`}
                     title={card.code ? `卡片 ${card.code}` : '未知卡片'}
+                    aria-description={
+                      locked ? undefined : cardAvailability(prompt, card)?.description
+                    }
                     onClick={(e) => activate(card, e)}
                     onPointerEnter={() => {
                       if (card.code) setInspect(card.code);
@@ -631,6 +649,9 @@ export function Duel({
                       data-hand-player={seat}
                     >
                       <CardImage code={card.code} />
+                      <ActionFrame
+                        available={locked ? undefined : cardAvailability(prompt, card)}
+                      />
                     </span>
                     {selectedOptions.some((o) => same(o, card)) && (
                       <span className="md-selected-mark">
@@ -711,7 +732,10 @@ export function Duel({
                     if (c.code) setInspect(c.code);
                   }}
                 >
-                  <CardImage code={c.code} back={!c.code} />
+                  <span className="md-browse-image">
+                    <CardImage code={c.code} back={!c.code} />
+                    <ActionFrame available={locked ? undefined : cardAvailability(prompt, c)} />
+                  </span>
                   <small>{c.code ? <CardName code={c.code} /> : '未知卡片'}</small>
                 </button>
               ))}
@@ -814,6 +838,16 @@ export function Duel({
           </button>
         </div>
         <div className="md-rail-footer">
+          <div className="md-action-legend" aria-label="卡片边框提示">
+            <span>
+              <i className="blue" />
+              召唤·盖放
+            </span>
+            <span>
+              <i className="gold" />
+              发动·特召
+            </span>
+          </div>
           <div className="md-chain-label">连锁询问</div>
           <div className="md-chain-switch" role="group" aria-label="连锁询问">
             {(
@@ -917,7 +951,12 @@ export function Duel({
           }}
         >
           {actions.map((o) => (
-            <button key={o.id} disabled={locked} onClick={() => respond({ ids: [o.id] })}>
+            <button
+              key={o.id}
+              data-action-tone={o.action === 1 || o.action === 5 ? 'gold' : 'blue'}
+              disabled={locked}
+              onClick={() => respond({ ids: [o.id] })}
+            >
               <span>
                 <ActionIcon action={o.action} />
               </span>
@@ -987,6 +1026,17 @@ export function Duel({
       )}
     </div>
   );
+}
+function ActionFrame({ available }: { available?: Availability }) {
+  return available ? (
+    <span
+      className={`md-action-frame ${available.tone}`}
+      data-action-highlight={available.tone}
+      aria-hidden="true"
+    >
+      <span className="md-availability-label">{available.label}</span>
+    </span>
+  ) : null;
 }
 function ActionIcon({ action }: { action?: number }) {
   return action === 10 ? (

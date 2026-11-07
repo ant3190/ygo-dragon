@@ -34,6 +34,18 @@ export function chooseBot(prompt, catalog, state) {
     });
     return input;
   }
+  if (prompt.tribute) {
+    let released = 0;
+    for (const option of [...options].sort(
+      (a, b) => (b.release_param || 1) - (a.release_param || 1),
+    )) {
+      if (input.ids.length >= prompt.max) break;
+      input.ids.push(option.id);
+      released += option.release_param || 1;
+      if (released >= (prompt.tributeMin ?? prompt.min) && input.ids.length >= prompt.min) break;
+    }
+    return input;
+  }
   if (prompt.kind === 'sum') {
     // Bound the search for very large scripted selections.
     let visited = 0;

@@ -1,0 +1,343 @@
+.md-opening {
+  min-height: 100dvh;
+  background: #10151b;
+  color: #e2ebf2;
+  padding: 30px 48px 24px;
+}
+.md-opening-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #8094a4;
+  font-size: 12px;
+}
+.md-opening-header .text-button {
+  color: #a4b6c4;
+  min-height: 40px;
+  font-size: 13px;
+}
+.md-opening-content {
+  width: min(900px, 100%);
+  margin: clamp(28px, 6dvh, 70px) auto 0;
+}
+.md-opening-players {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding-bottom: 25px;
+  box-shadow: 0 1px 0 #ffffff09;
+}
+.md-opening-players > span {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  max-width: 45%;
+  overflow: hidden;
+}
+.md-opening-players i {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 40px;
+  border-radius: 9px;
+  font-style: normal;
+  background: #283c4c;
+  color: #bcd9ec;
+  flex-shrink: 0;
+}
+.md-opening-players i.opponent {
+  background: #3e2d37;
+  color: #d7b8c4;
+}
+.md-opening-title {
+  text-align: center;
+  margin: 38px 0 28px;
+}
+.md-opening-title > span {
+  color: #8196a6;
+  font-size: 11px;
+}
+.md-opening-title h1 {
+  font-size: clamp(26px, 3vw, 34px);
+  font-weight: 500;
+  margin: 9px 0 10px;
+  letter-spacing: 2px;
+}
+.md-opening-title p {
+  color: #9db0bf;
+  font-size: 13px;
+  min-height: 22px;
+}
+.md-rps-choices {
+  display: flex;
+  justify-content: center;
+  gap: 22px;
+}
+.md-gesture-choice {
+  position: relative;
+  width: 176px;
+  height: 206px;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #273643, #1e2c38);
+  box-shadow:
+    inset 0 1px 0 #ffffff0b,
+    0 8px 20px #0002;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 22px;
+  color: #bdceda;
+  transition:
+    background 0.18s,
+    box-shadow 0.18s,
+    color 0.18s;
+}
+.md-gesture-choice svg {
+  width: 93px;
+  height: 93px;
+}
+.md-gesture-choice > span {
+  font-size: 16px;
+}
+.md-gesture-choice:hover:not(:disabled),
+.md-order-choice:hover:not(:disabled) {
+  background: linear-gradient(145deg, #314454, #263848);
+  color: #edf4f8;
+}
+.md-gesture-choice.selected,
+.md-order-choice.selected {
+  box-shadow:
+    inset 0 0 0 2px #91bad2,
+    0 8px 24px #0002;
+  background: linear-gradient(145deg, #304656, #263a49);
+  color: #e7f3fc;
+}
+.md-gesture-choice .md-gesture-check {
+  position: absolute;
+  right: 13px;
+  top: 13px;
+  width: 18px;
+  height: 18px;
+  color: #b4d8ee;
+}
+.md-opening-confirm {
+  min-height: 65px;
+  margin: 26px 0 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.md-opening-confirm .button {
+  min-width: 202px;
+  min-height: 46px;
+}
+.md-opening-confirm > span {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  color: #8fa4b4;
+  font-size: 12px;
+}
+.md-opening-steps {
+  display: flex;
+  gap: 42px;
+  list-style: decimal-leading-zero;
+  justify-content: center;
+  color: #526a7d;
+  padding-left: 21px;
+  margin: 36px 0 0;
+  font-size: 11px;
+}
+.md-opening-steps .current {
+  color: #b7cfdf;
+}
+.md-order-choices {
+  display: flex;
+  justify-content: center;
+  gap: 22px;
+  min-height: 206px;
+  align-items: center;
+}
+.md-order-choice {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 11px;
+  text-align: left;
+  width: 260px;
+  height: 156px;
+  padding: 30px;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #273643, #1e2c38);
+  box-shadow:
+    inset 0 1px 0 #ffffff0b,
+    0 8px 20px #0002;
+}
+.md-order-choice b {
+  font-size: 25px;
+  font-weight: 500;
+}
+.md-order-choice span {
+  color: #9db0bf;
+  font-size: 12px;
+}
+.md-order-choice > svg {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+}
+.md-opening-decks {
+  height: 206px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 45px;
+}
+.md-opening-decks > .card-image {
+  width: 112px;
+  height: 164px;
+  box-shadow: 0 8px 20px #0005;
+}
+.md-opening-decks > span:not(.card-image) {
+  font-size: 12px;
+  color: #839cad;
+}
+.md-rps-reveal {
+  height: 206px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 55px;
+}
+.md-rps-reveal > div {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  min-width: 140px;
+  color: #bcd9ec;
+}
+.md-rps-reveal > div.opponent {
+  color: #d7b8c4;
+}
+.md-rps-reveal > div > span {
+  font-size: 11px;
+  color: #8ba0b0;
+}
+.md-rps-reveal svg {
+  width: 112px;
+  height: 112px;
+}
+.md-rps-reveal b {
+  font-size: 14px;
+  font-weight: 500;
+}
+.md-rps-divider {
+  font-size: 12px;
+  color: #708696;
+}
+.md-hidden-gesture {
+  height: 112px;
+  display: grid;
+  place-items: center;
+  font-size: 68px;
+  color: #465e70;
+  font-weight: 300;
+}
+.md-rps-reveal.revealed > div {
+  animation: hand-reveal 0.5s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+.md-rps-reveal.revealed > div.opponent {
+  animation-delay: 0.04s;
+}
+@keyframes hand-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(22px) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (max-width: 620px) {
+  .md-opening {
+    padding: 18px 20px;
+  }
+  .md-opening-content {
+    margin-top: 28px;
+  }
+  .md-opening-title {
+    margin-top: 28px;
+  }
+  .md-rps-choices {
+    gap: 10px;
+  }
+  .md-gesture-choice {
+    width: 30%;
+    height: 160px;
+    gap: 18px;
+    border-radius: 9px;
+  }
+  .md-gesture-choice svg {
+    width: 68px;
+    height: 68px;
+  }
+  .md-gesture-choice > span {
+    font-size: 14px;
+  }
+  .md-opening-steps {
+    gap: 30px;
+    font-size: 10px;
+  }
+  .md-opening-players > span {
+    font-size: 12px;
+    gap: 8px;
+  }
+  .md-rps-reveal {
+    gap: 18px;
+  }
+  .md-rps-reveal > div {
+    min-width: 90px;
+  }
+  .md-rps-reveal svg {
+    width: 88px;
+    height: 88px;
+  }
+  .md-order-choice {
+    padding: 22px;
+    width: 46%;
+  }
+  .md-order-choices {
+    gap: 12px;
+  }
+}
+@media (max-height: 700px) and (min-width: 621px) {
+  .md-opening {
+    padding-top: 16px;
+  }
+  .md-opening-content {
+    margin-top: 15px;
+  }
+  .md-opening-title {
+    margin-top: 23px;
+    margin-bottom: 18px;
+  }
+  .md-gesture-choice {
+    height: 165px;
+    gap: 14px;
+  }
+  .md-gesture-choice svg {
+    width: 76px;
+    height: 76px;
+  }
+  .md-opening-steps {
+    margin-top: 18px;
+  }
+  .md-opening-confirm {
+    margin-top: 15px;
+  }
+}

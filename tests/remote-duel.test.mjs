@@ -28,6 +28,7 @@ test(
       views = [],
       frames = [];
     let step = 0,
+      rpsRound = 0,
       querySeen = false,
       finished;
     const done = new Promise((resolve, reject) => {
@@ -76,8 +77,9 @@ test(
             }
             if (p.type === 37) ws.send(packet(3));
             if (p.type === 3) {
-              assert.equal(p.data[0], 1);
-              ws.send(packet(4));
+              assert.equal(p.data[0], 2, 'the stone button must send rock=2');
+              if (++rpsRound === 1) ws.send(bytes(packet(5, Buffer.from([2, 2])), packet(3)));
+              else ws.send(bytes(packet(5, Buffer.from([2, 1])), packet(4)));
             }
             if (p.type === 4) {
               assert.equal(p.data[0], 1);
@@ -145,7 +147,8 @@ test(
         }
         const p = m.prompt;
         if (!p) return;
-        if (p.kind === 'choice') remote.response({ promptId: p.id, ids: ['0'] });
+        if (['choice', 'rps', 'turn-order'].includes(p.kind))
+          remote.response({ promptId: p.id, ids: ['0'] });
         if (p.kind === 'zones') {
           assert.equal(p.options[0].controller, 0);
           remote.response({ promptId: p.id, ids: ['0'] });
@@ -167,6 +170,21 @@ test(
     await done;
     assert(querySeen);
     assert.equal(step, 8);
+    assert.equal(rpsRound, 2);
+    assert.deepEqual(
+      frames.filter((f) => f.motion.type === 'rps').map((f) => f.state.opening.outcome),
+      ['draw', 'win'],
+    );
+    assert(
+      views.some(
+        (v) =>
+          v.state.opening?.stage === 'rps-wait' &&
+          v.state.opening.mine === 2 &&
+          v.state.opening.opponent === undefined,
+      ),
+    );
+    assert(views.some((v) => v.prompt?.kind === 'turn-order'));
+    assert(views.some((v) => v.state.turn > 0 && !v.state.opening));
     assert(frames.some((f) => f.motion.type === 'draw'));
     assert(views.some((v) => v.prompt?.kind === 'unselect'));
     assert(received.some((p) => p.type === 34));
