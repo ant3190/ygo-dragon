@@ -79,7 +79,7 @@ export function Duel({
   const root = useRef<HTMLDivElement>(null),
     [inspect, setInspect] = useState(0),
     [active, setActive] = useState<FieldCard | null>(null),
-    [anchor, setAnchor] = useState({ x: 0, y: 0 }),
+    [anchor, setAnchor] = useState({ x: 0, y: 0, width: 0 }),
     [selected, setSelected] = useState<string[]>([]),
     [submitting, setSubmitting] = useState(false),
     [browse, setBrowse] = useState<{ player: number; location: number } | null>(null),
@@ -199,12 +199,12 @@ export function Duel({
       setShowInfo(false);
       return;
     }
-    if (menuOpen) {
-      setMenuOpen(false);
+    if (active) {
+      setActive(null);
       return;
     }
-    if (browse) {
-      setBrowse(null);
+    if (menuOpen) {
+      setMenuOpen(false);
       return;
     }
     if (phaseOpen) {
@@ -212,8 +212,12 @@ export function Duel({
       setPhaseConfirm(null);
       return;
     }
-    if (active) {
-      setActive(null);
+    if (logOpen) {
+      setLogOpen(false);
+      return;
+    }
+    if (browse) {
+      setBrowse(null);
       return;
     }
     if (locked) return;
@@ -229,7 +233,7 @@ export function Duel({
       }
     }
     if (prompt?.canCancel && !locked) respond({ cancel: true });
-  }, [showInfo, menuOpen, browse, phaseOpen, active, prompt, selected, locked, respond]);
+  }, [showInfo, menuOpen, browse, phaseOpen, active, logOpen, prompt, selected, locked, respond]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) return;
@@ -261,8 +265,31 @@ export function Duel({
       return;
     }
     if (prompt?.kind === 'actions' && options.some((o) => same(o, card)) && !locked) {
-      const rect = event.currentTarget.getBoundingClientRect();
-      setAnchor({ x: rect.left + rect.width / 2, y: rect.top });
+      const rect = event.currentTarget.getBoundingClientRect(),
+        browser = event.currentTarget.closest('.md-browser')?.getBoundingClientRect(),
+        count = options.filter((o) => same(o, card)).length,
+        columns = Math.min(count, Math.max(1, Math.floor((innerWidth - 36) / 82))),
+        height = Math.ceil(count / columns) * 79 + 12,
+        width = columns * 82 + 12;
+      const above = (browser?.top ?? rect.top) - height - 8;
+      const beside = browser
+        ? rect.right + width + 8 <= innerWidth - 12
+          ? rect.right + 8
+          : rect.left - width - 8 >= 12
+            ? rect.left - width - 8
+            : null
+        : null;
+      const top =
+        beside !== null
+          ? rect.top + (rect.height - height) / 2
+          : above >= 12
+            ? above
+            : rect.bottom + 8;
+      setAnchor({
+        x: beside !== null ? beside + width / 2 : rect.left + rect.width / 2,
+        y: Math.max(12, Math.min(top, innerHeight - height - 12)),
+        width,
+      });
       setActive(card);
     } else setActive(null);
   };
@@ -275,6 +302,11 @@ export function Duel({
       : room?.players[1 - seat]?.name || room?.opponent || 'AI 对手';
   const mine = state.players[seat],
     other = state.players[1 - seat];
+  const browsedCards = browse
+    ? (state.players[browse.player].zones[browse.location] || []).filter(
+        (card): card is FieldCard => !!card,
+      )
+    : [];
   const selectCount = prompt?.kind === 'unselect' ? selectedOptions.length : selected.length;
   const clickBlank = (player: number, location: number, sequence: number) => {
     const option =
@@ -335,7 +367,15 @@ export function Duel({
           </>
         ) : (
           <span className="md-zone-corners">
-            <small>{location === 4 ? (sequence > 4 ? 'EX' : 'M') : 'S/T'}</small>
+            <small>
+              {location === 4
+                ? sequence > 4
+                  ? 'EX'
+                  : `M${sequence + 1}`
+                : sequence === 5
+                  ? '场地'
+                  : `S${sequence + 1}`}
+            </small>
           </span>
         )}
         {chosen && (
@@ -385,21 +425,81 @@ export function Duel({
       </button>
     );
   };
-  const fieldSide = (player: number, opponent: boolean) => (
-    <div className={`md-field-half ${opponent ? 'upper' : 'lower'}`}>
-      <div className="md-five md-spells">
-        {Array.from({ length: 5 }, (_, i) => (opponent ? 4 - i : i)).map((i) => tile(player, 8, i))}
-      </div>
-      <div className="md-five md-monsters">
-        {Array.from({ length: 5 }, (_, i) => (opponent ? 4 - i : i)).map((i) => tile(player, 4, i))}
-      </div>
-      <div className="md-side md-deck">{pile(player, 1, '卡组')}</div>
-      <div className="md-side md-extra">{pile(player, 64, '额外')}</div>
-      <div className="md-side md-grave">{pile(player, 16, '墓地')}</div>
-      <div className="md-side md-field-spell">{tile(player, 8, 5)}</div>
-      <div className="md-side md-banished">{pile(player, 32, '除外')}</div>
+  const cell = (content: React.ReactNode, key: string, column: number, row: number, kind = '') => (
+    <div className={`md-board-cell ${kind}`} key={key} style={{ gridColumn: column, gridRow: row }}>
+      {content}
     </div>
   );
+  const fieldSide = (player: number, opponent: boolean) => (
+    <>
+      {Array.from({ length: 5 }, (_, i) => (opponent ? 4 - i : i)).map((sequence, i) =>
+        cell(
+          tile(player, 8, sequence),
+          `${player}-spell-${sequence}`,
+          i + 2,
+          opponent ? 1 : 5,
+          'spell',
+        ),
+      )}
+      {Array.from({ length: 5 }, (_, i) => (opponent ? 4 - i : i)).map((sequence, i) =>
+        cell(
+          tile(player, 4, sequence),
+          `${player}-monster-${sequence}`,
+          i + 2,
+          opponent ? 2 : 4,
+          'monster',
+        ),
+      )}
+      {cell(
+        pile(player, 1, '卡组'),
+        `${player}-deck`,
+        opponent ? 1 : 7,
+        opponent ? 1 : 5,
+        'pile deck',
+      )}
+      {cell(
+        pile(player, 64, '额外'),
+        `${player}-extra`,
+        opponent ? 7 : 1,
+        opponent ? 1 : 5,
+        'pile extra',
+      )}
+      {cell(
+        pile(player, 16, '墓地'),
+        `${player}-grave`,
+        opponent ? 1 : 7,
+        opponent ? 2 : 4,
+        'pile grave',
+      )}
+      {cell(
+        tile(player, 8, 5),
+        `${player}-field`,
+        opponent ? 7 : 1,
+        opponent ? 2 : 4,
+        'field-spell',
+      )}
+      {cell(pile(player, 32, '除外'), `${player}-banished`, opponent ? 1 : 7, 3, 'pile banished')}
+    </>
+  );
+  const phaseSteps = [
+    { value: 1, short: 'DP', name: '抽卡', action: '' },
+    { value: 2, short: 'SP', name: '准备', action: '' },
+    { value: 4, short: 'M1', name: '主要 1', action: '' },
+    { value: 16, short: 'BP', name: '战斗', action: 'battle' },
+    { value: 256, short: 'M2', name: '主要 2', action: 'main2' },
+    { value: 512, short: 'EP', name: '结束', action: 'end' },
+  ];
+  const openPhase = (option: Option) => {
+    setActive(null);
+    if (option.phase === 'end' && settings.confirmEnd) {
+      setPhaseConfirm(option);
+      setPhaseOpen(true);
+    } else respond({ ids: [option.id] });
+  };
+  const toggleMenu = () => {
+    setActive(null);
+    setMenuOpen(!menuOpen);
+  };
   return (
     <div
       ref={root}
@@ -415,11 +515,7 @@ export function Duel({
     >
       <aside className="md-inspector">
         <div className="md-system">
-          <button
-            className="icon-button"
-            aria-label="对战菜单"
-            onClick={() => setMenuOpen(!menuOpen)}
-          >
+          <button className="icon-button" aria-label="对战菜单" onClick={toggleMenu}>
             <Menu size={20} />
           </button>
           <span>DRAGON</span>
@@ -442,24 +538,46 @@ export function Duel({
           if (e.target === e.currentTarget) setActive(null);
         }}
       >
-        <header className="md-opponent-head">
-          <span className="md-room-label">
-            {room?.source || '自由对战'}
-            {room?.mode === 'online' && ` · ${room.id}`}
-          </span>
-          <PlayerLife name={label(1 - seat)} lp={other.lp} own={false} motion={settings.motion} />
-        </header>
         <div className="md-opponent-hand" aria-label={`对方手牌 ${other.zones[2]?.length || 0} 张`}>
-          {other.zones[2]?.map((c, i) => (
-            <span
-              className="md-motion-card"
-              data-motion-key={c ? cardKey(c) : `opp-${i}`}
-              data-hand-player={1 - seat}
-              key={c ? cardKey(c) : i}
-            >
-              <CardImage back />
-            </span>
-          ))}
+          <span className="md-hand-label">
+            对方手牌 <b>{other.zones[2]?.length || 0}</b>
+          </span>
+          <div
+            className="md-opponent-cards"
+            style={
+              { '--hand-count': Math.max(1, other.zones[2]?.length || 0) } as React.CSSProperties
+            }
+          >
+            {other.zones[2]?.map(
+              (card, i) =>
+                card && (
+                  <button
+                    className={`md-opponent-card ${selectedOptions.some((o) => same(o, card)) ? 'chosen' : ''}`}
+                    key={cardKey(card)}
+                    aria-label={`对方手牌 ${i + 1}`}
+                    onClick={(e) => activate(card, e)}
+                    onPointerEnter={() => {
+                      if (card.code) setInspect(card.code);
+                    }}
+                  >
+                    <span
+                      className="md-motion-card"
+                      data-motion-key={cardKey(card)}
+                      data-hand-player={1 - seat}
+                    >
+                      <span className="md-card-rotation">
+                        <CardImage code={card.code} back={!card.code} />
+                      </span>
+                    </span>
+                    {selectedOptions.some((o) => same(o, card)) && (
+                      <span className="md-selected-mark">
+                        <Check size={15} />
+                      </span>
+                    )}
+                  </button>
+                ),
+            )}
+          </div>
         </div>
         <section className="md-table" aria-label="对战场地">
           <div className="md-mat-divider" />
@@ -481,38 +599,48 @@ export function Duel({
             })}
           </div>
           {fieldSide(seat, false)}
-          <span className="md-mat-sign">D</span>
+
           <AttackLine root={root} motion={motion} seat={seat} />
         </section>
         <div className="md-hand" aria-label="我方手牌">
-          {mine.zones[2]?.map(
-            (card, i) =>
-              card && (
-                <button
-                  className={`md-hand-card ${options.some((o) => same(o, card)) ? 'actionable' : ''} ${active && same(active, card) ? 'active' : ''} ${selectedOptions.some((o) => same(o, card)) ? 'chosen' : ''}`}
-                  key={cardKey(card)}
-                  aria-label={`手牌 ${card.code || i}`}
-                  title={card.code ? `卡片 ${card.code}` : '未知卡片'}
-                  onClick={(e) => activate(card, e)}
-                  onPointerEnter={() => {
-                    if (card.code) setInspect(card.code);
-                  }}
-                >
-                  <span
-                    className="md-motion-card"
-                    data-motion-key={cardKey(card)}
-                    data-hand-player={seat}
+          <span className="md-hand-label">
+            我方手牌 <b>{mine.zones[2]?.length || 0}</b>
+          </span>
+          <div
+            className="md-hand-cards"
+            style={
+              { '--hand-count': Math.max(1, mine.zones[2]?.length || 0) } as React.CSSProperties
+            }
+          >
+            {mine.zones[2]?.map(
+              (card, i) =>
+                card && (
+                  <button
+                    className={`md-hand-card ${options.some((o) => same(o, card)) ? 'actionable' : ''} ${active && same(active, card) ? 'active' : ''} ${selectedOptions.some((o) => same(o, card)) ? 'chosen' : ''}`}
+                    key={cardKey(card)}
+                    aria-label={`手牌 ${card.code || i}`}
+                    title={card.code ? `卡片 ${card.code}` : '未知卡片'}
+                    onClick={(e) => activate(card, e)}
+                    onPointerEnter={() => {
+                      if (card.code) setInspect(card.code);
+                    }}
                   >
-                    <CardImage code={card.code} />
-                  </span>
-                  {selectedOptions.some((o) => same(o, card)) && (
-                    <span className="md-selected-mark">
-                      <Check size={16} />
+                    <span
+                      className="md-motion-card"
+                      data-motion-key={cardKey(card)}
+                      data-hand-player={seat}
+                    >
+                      <CardImage code={card.code} />
                     </span>
-                  )}
-                </button>
-              ),
-          )}
+                    {selectedOptions.some((o) => same(o, card)) && (
+                      <span className="md-selected-mark">
+                        <Check size={16} />
+                      </span>
+                    )}
+                  </button>
+                ),
+            )}
+          </div>
         </div>
         <div className="md-status-line" role="status">
           {fatal ? (
@@ -528,93 +656,6 @@ export function Duel({
             prompt?.title || (!state.turn ? '正在邀请 AI 对手' : '等待对方操作')
           )}
         </div>
-        <div className="md-bottom-tools">
-          <button className="icon-button" aria-label="卡片详情" onClick={() => setShowInfo(true)}>
-            <Info size={20} />
-          </button>
-          <button
-            className={`icon-button ${logOpen ? 'active' : ''}`}
-            aria-label="决斗记录"
-            onClick={() => setLogOpen(!logOpen)}
-          >
-            <List size={20} />
-          </button>
-          <div className="md-chain-switch" role="group" aria-label="连锁询问">
-            {[
-              ['off', '跳过'],
-              ['auto', '自动'],
-              ['all', '全时点'],
-            ].map(([id, text]) => (
-              <button
-                key={id}
-                className={effectiveChain === id ? 'active' : ''}
-                aria-pressed={effectiveChain === id}
-                onClick={() => onSettings({ ...settings, chain: id as Settings['chain'] })}
-                title="按住左键临时全时点，按住右键临时跳过"
-              >
-                {text}
-              </button>
-            ))}
-          </div>
-        </div>
-        <button
-          className={`md-phase-wheel ${state.turnPlayer === seat ? 'own-turn' : ''}`}
-          aria-label="切换阶段"
-          disabled={!phaseActions.length || locked}
-          onClick={() => {
-            setPhaseOpen(!phaseOpen);
-            setActive(null);
-          }}
-        >
-          <span>TURN {state.turn}</span>
-          <b>{phases[state.phase] || '准备中'}</b>
-          <ChevronRightSmall />
-        </button>
-        {phaseOpen && (
-          <div className="md-phase-menu">
-            <div>
-              <h3>{phaseConfirm ? '确认结束回合？' : '切换阶段'}</h3>
-              <button
-                className="icon-button"
-                aria-label="关闭阶段菜单"
-                onClick={() => {
-                  setPhaseOpen(false);
-                  setPhaseConfirm(null);
-                }}
-              >
-                <X size={15} />
-              </button>
-            </div>
-            {phaseConfirm ? (
-              <div className="button-group">
-                <button className="button secondary" onClick={() => setPhaseConfirm(null)}>
-                  返回
-                </button>
-                <button
-                  className="button primary"
-                  onClick={() => respond({ ids: [phaseConfirm.id] })}
-                >
-                  结束回合
-                  <Check size={15} />
-                </button>
-              </div>
-            ) : (
-              phaseActions.map((o) => (
-                <button
-                  key={o.id}
-                  onClick={() =>
-                    o.phase === 'end' && settings.confirmEnd
-                      ? setPhaseConfirm(o)
-                      : respond({ ids: [o.id] })
-                  }
-                >
-                  {o.label}
-                  <ArrowRight size={16} />
-                </button>
-              ))
-            )}
-          </div>
-        )}
         {motion?.type === 'turn' && (
           <div className="md-turn-cue" key={`${state.turn}-${state.turnPlayer}`}>
             {state.turnPlayer === seat ? '你的回合' : '对方回合'}
@@ -637,7 +678,14 @@ export function Duel({
           </div>
         )}
         {browse && (
-          <div className="md-browser">
+          <div
+            className="md-browser"
+            style={
+              {
+                '--selection-width': `${Math.min(780, Math.max(300, browsedCards.length * 110 + 40))}px`,
+              } as React.CSSProperties
+            }
+          >
             <div className="md-drawer-heading">
               <h3>
                 {browse.player === seat ? '我方' : '对方'} · {locationLabel[browse.location]}
@@ -645,31 +693,30 @@ export function Duel({
               <button
                 className="icon-button"
                 aria-label="关闭区域列表"
-                onClick={() => setBrowse(null)}
+                onClick={() => {
+                  setActive(null);
+                  setBrowse(null);
+                }}
               >
                 <X size={17} />
               </button>
             </div>
             <div className="md-browse-cards">
-              {state.players[browse.player].zones[browse.location]
-                ?.filter((c): c is FieldCard => !!c)
-                .map((c, i) => (
-                  <button
-                    key={cardKey(c)}
-                    className={`${options.some((o) => same(o, c)) ? 'eligible' : ''} ${selectedOptions.some((o) => same(o, c)) ? 'selected' : ''}`}
-                    onClick={(e) => activate(c, e)}
-                    onPointerEnter={() => {
-                      if (c.code) setInspect(c.code);
-                    }}
-                  >
-                    <CardImage code={c.code} back={!c.code} />
-                    <small>{c.code ? <CardName code={c.code} /> : '未知卡片'}</small>
-                  </button>
-                ))}
+              {browsedCards.map((c) => (
+                <button
+                  key={cardKey(c)}
+                  className={`${options.some((o) => same(o, c)) ? 'eligible' : ''} ${selectedOptions.some((o) => same(o, c)) ? 'selected' : ''}`}
+                  onClick={(e) => activate(c, e)}
+                  onPointerEnter={() => {
+                    if (c.code) setInspect(c.code);
+                  }}
+                >
+                  <CardImage code={c.code} back={!c.code} />
+                  <small>{c.code ? <CardName code={c.code} /> : '未知卡片'}</small>
+                </button>
+              ))}
             </div>
-            {!state.players[browse.player].zones[browse.location]?.length && (
-              <p className="muted">这个区域没有卡片</p>
-            )}
+            {!browsedCards.length && <p className="muted">这个区域没有卡片</p>}
           </div>
         )}
         {prompt && prompt.kind !== 'actions' && !state.ended && (
@@ -717,12 +764,156 @@ export function Duel({
           </div>
         )}
       </main>
+      <aside className="md-control-rail" aria-label="对战控制">
+        <header className="md-opponent-head">
+          <span className="md-room-label">
+            {room?.source || '自由对战'}
+            {room?.mode === 'online' && ` · ${room.id}`}
+          </span>
+          <PlayerLife name={label(1 - seat)} lp={other.lp} own={false} motion={settings.motion} />
+        </header>
+        <div className="md-phase-panel">
+          <div className="md-turn-label">
+            <span className={state.turnPlayer === seat ? 'mine' : 'theirs'}></span>第 {state.turn}{' '}
+            回合 · {state.turnPlayer === seat ? '我方' : '对方'}
+          </div>
+          <div className="md-phase-list" aria-label="对战阶段">
+            {phaseSteps.map((step) => {
+              const current =
+                step.value === 16
+                  ? state.phase >= 8 && state.phase <= 128
+                  : state.phase === step.value;
+              const option = phaseActions.find((o) => o.phase === step.action && !!step.action);
+              return (
+                <button
+                  key={step.short}
+                  className={`md-phase-step ${current ? 'current' : ''} ${option ? 'available' : ''}`}
+                  aria-current={current ? 'step' : undefined}
+                  aria-label={option?.label || `${step.name}阶段`}
+                  disabled={!option || locked}
+                  onClick={() => option && openPhase(option)}
+                >
+                  <span>{step.short}</span>
+                  <b>{step.name}</b>
+                  {current ? <i /> : option ? <ArrowRight size={15} /> : null}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            className="md-mobile-phase"
+            aria-label="切换阶段"
+            disabled={!phaseActions.length || locked}
+            onClick={() => {
+              setPhaseConfirm(null);
+              setPhaseOpen(!phaseOpen);
+            }}
+          >
+            {phases[state.phase] || '准备中'}
+            <ChevronDown size={16} />
+          </button>
+        </div>
+        <div className="md-rail-footer">
+          <div className="md-chain-label">连锁询问</div>
+          <div className="md-chain-switch" role="group" aria-label="连锁询问">
+            {(
+              [
+                ['off', '跳过'],
+                ['auto', '自动'],
+                ['all', '全时点'],
+              ] as const
+            ).map(([id, text]) => (
+              <button
+                key={id}
+                className={effectiveChain === id ? 'active' : ''}
+                aria-pressed={effectiveChain === id}
+                onClick={() => onSettings({ ...settings, chain: id })}
+                title="按住左键临时全时点，按住右键临时跳过"
+              >
+                {text}
+              </button>
+            ))}
+          </div>
+          <div className="md-bottom-tools">
+            <button
+              className="icon-button md-info-tool"
+              aria-label="卡片详情"
+              onClick={() => setShowInfo(true)}
+            >
+              <Info size={19} />
+            </button>
+            <button
+              className={`icon-button ${logOpen ? 'active' : ''}`}
+              aria-label="决斗记录"
+              onClick={() => setLogOpen(!logOpen)}
+            >
+              <List size={19} />
+            </button>
+            <button
+              className={`icon-button md-menu-tool ${menuOpen ? 'active' : ''}`}
+              aria-label="对战菜单"
+              onClick={toggleMenu}
+            >
+              <Menu size={19} />
+            </button>
+          </div>
+        </div>
+        <div className="md-mobile-own">
+          <PlayerLife name={label(seat)} lp={mine.lp} own motion={settings.motion} />
+        </div>
+        {phaseOpen && (
+          <div className="md-phase-menu">
+            <div>
+              <h3>{phaseConfirm ? '确认结束回合？' : '切换阶段'}</h3>
+              <button
+                className="icon-button"
+                aria-label="关闭阶段菜单"
+                onClick={() => {
+                  setPhaseOpen(false);
+                  setPhaseConfirm(null);
+                }}
+              >
+                <X size={15} />
+              </button>
+            </div>
+            {phaseConfirm ? (
+              <div className="button-group">
+                <button className="button secondary" onClick={() => setPhaseConfirm(null)}>
+                  返回
+                </button>
+                <button
+                  className="button primary"
+                  onClick={() => respond({ ids: [phaseConfirm.id] })}
+                >
+                  结束回合
+                  <Check size={15} />
+                </button>
+              </div>
+            ) : (
+              phaseActions.map((o) => (
+                <button
+                  key={o.id}
+                  onClick={() =>
+                    o.phase === 'end' && settings.confirmEnd
+                      ? setPhaseConfirm(o)
+                      : respond({ ids: [o.id] })
+                  }
+                >
+                  {o.label}
+                  <ArrowRight size={16} />
+                </button>
+              ))
+            )}
+          </div>
+        )}
+      </aside>
       {actions.length > 0 && (
         <div
           className="md-actions"
           style={{
-            left: `clamp(12px, ${anchor.x - actions.length * 34}px, calc(100vw - ${actions.length * 68 + 12}px))`,
-            top: Math.max(65, anchor.y - 92),
+            left: `clamp(12px, ${anchor.x - anchor.width / 2}px, calc(100vw - ${anchor.width + 12}px))`,
+            top: anchor.y,
+            width: anchor.width,
           }}
         >
           {actions.map((o) => (
@@ -891,14 +1082,18 @@ function AttackLine({
       setLine(null);
       return;
     }
+    const visibleLife = (selector: string) =>
+      Array.from(root.current?.querySelectorAll(selector) || []).find(
+        (element) => element.getBoundingClientRect().width > 0,
+      );
     const table = root.current?.querySelector('.md-table'),
       from = root.current?.querySelector(`[data-zone-key="${spot(motion.from)}"]`),
       to = motion.to?.location
         ? root.current?.querySelector(`[data-zone-key="${spot(motion.to)}"]`)
-        : root.current?.querySelector(
+        : visibleLife(
             motion.from.controller === seat
               ? '.md-opponent-head .md-player-life'
-              : '.md-own-life .md-player-life',
+              : '.md-own-life .md-player-life, .md-mobile-own .md-player-life',
           );
     if (!table || !from || !to) return;
     const t = table.getBoundingClientRect(),

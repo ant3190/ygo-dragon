@@ -28,14 +28,14 @@ import './duel/duel.css';
 const defaults: Settings = {
   name: '决斗者',
   motion: 'normal',
-  accent: 'amber',
+  accent: 'blue',
   confirmEnd: true,
   chain: 'auto',
 };
 function savedSettings(): Settings {
   try {
     const saved = JSON.parse(localStorage.getItem('dragon-settings') || '{}');
-    if (!saved.interfaceVersion && saved.accent === 'jade') saved.accent = 'amber';
+    if ((saved.interfaceVersion || 0) < 3 && saved.accent === 'amber') saved.accent = 'blue';
     return { ...defaults, ...saved };
   } catch {
     return defaults;
@@ -99,7 +99,7 @@ function App() {
     document.documentElement.dataset.accent = settings.accent;
     document.documentElement.dataset.motion = settings.motion;
     try {
-      localStorage.setItem('dragon-settings', JSON.stringify({ ...settings, interfaceVersion: 2 }));
+      localStorage.setItem('dragon-settings', JSON.stringify({ ...settings, interfaceVersion: 3 }));
     } catch {}
   }, [settings]);
   useEffect(() => {
@@ -338,7 +338,6 @@ function Home({
     <div className="game-lobby">
       <div className="lobby-title">
         <div>
-          <span className="lobby-symbol">D</span>
           <h1>决斗</h1>
         </div>
         <span>Master Rule 5</span>
